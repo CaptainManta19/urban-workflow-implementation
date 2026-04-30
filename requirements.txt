@@ -1,0 +1,10 @@
+dash
+plotly
+langgraph
+langchain
+langchain-groq
+pydantic
+python-dotenv
+pandas
+geopandas
+pyogrio

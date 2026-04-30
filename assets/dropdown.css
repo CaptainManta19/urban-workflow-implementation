@@ -1,0 +1,65 @@
+.Select {
+  z-index: 30;
+  width: 100%;
+}
+
+.Select-menu-outer {
+  z-index: 40;
+  background: #ffffff;
+  border: 1px solid #d1d5db;
+  border-radius: 12px;
+  box-shadow: 0 12px 28px rgba(15, 23, 42, 0.12);
+  overflow: hidden;
+}
+
+.Select-menu {
+  background: #ffffff;
+}
+
+.VirtualizedSelectOption {
+  background: #ffffff;
+  white-space: normal !important;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+  padding-top: 12px;
+  padding-bottom: 12px;
+  height: auto !important;
+}
+
+.VirtualizedSelectFocusedOption {
+  background: #f3f4f6;
+  white-space: normal !important;
+  overflow-wrap: anywhere;
+  line-height: 1.4;
+  padding-top: 12px;
+  padding-bottom: 12px;
+  height: auto !important;
+}
+
+.Select-menu-outer .VirtualizedSelectOption {
+  position: relative;
+  z-index: 1;
+}
+
+.Select-menu-outer .VirtualizedSelectFocusedOption {
+  position: relative;
+  z-index: 1;
+}
+
+.Select-menu-outer .Select-input {
+  position: sticky;
+  top: 0;
+  z-index: 5;
+  background: #ffffff;
+  padding: 10px 10px 8px 10px;
+  box-shadow: 0 1px 0 #e5e7eb;
+}
+
+.Select-menu-outer .Select-input > input {
+  background: #ffffff;
+}
+
+.Select-menu-outer .VirtualizedSelectOption:first-of-type,
+.Select-menu-outer .VirtualizedSelectFocusedOption:first-of-type {
+  border-top: 0;
+}
