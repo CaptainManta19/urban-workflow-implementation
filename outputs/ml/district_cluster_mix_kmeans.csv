@@ -1,0 +1,22 @@
+district_name,district_key,cluster_shares,dominant_cluster_label
+Arganzuela,arganzuela,"{'cluster_0': 0.019801980198019802, 'cluster_1': 0.46534653465346537, 'cluster_2': 0.3564356435643564, 'cluster_3': 0.15841584158415842}",cluster_1
+Barajas,barajas,"{'cluster_0': 0.5693430656934306, 'cluster_1': 0.3357664233576642, 'cluster_2': 0.08029197080291971, 'cluster_3': 0.014598540145985401}",cluster_0
+Carabanchel,carabanchel,"{'cluster_0': 0.31683168316831684, 'cluster_1': 0.5841584158415841, 'cluster_2': 0.06930693069306931, 'cluster_3': 0.0297029702970297}",cluster_1
+Centro,centro,"{'cluster_0': 0.01282051282051282, 'cluster_1': 0.5, 'cluster_2': 0.2948717948717949, 'cluster_3': 0.19230769230769232}",cluster_1
+Chamartín,chamartín,"{'cluster_0': 0.1506849315068493, 'cluster_1': 0.4246575342465753, 'cluster_2': 0.3356164383561644, 'cluster_3': 0.0821917808219178, 'cluster_4': 0.00684931506849315}",cluster_1
+Chamberí,chamberí,"{'cluster_0': 0.013333333333333334, 'cluster_1': 0.14666666666666667, 'cluster_2': 0.7066666666666667, 'cluster_3': 0.13333333333333333}",cluster_2
+Ciudad Lineal,ciudadlineal,"{'cluster_0': 0.10909090909090909, 'cluster_1': 0.5575757575757576, 'cluster_2': 0.30303030303030304, 'cluster_3': 0.030303030303030304}",cluster_1
+Fuencarral-El Pardo,fuencarralelpardo,"{'cluster_0': 0.5836012861736335, 'cluster_1': 0.2427652733118971, 'cluster_2': 0.15916398713826366, 'cluster_3': 0.011254019292604502, 'cluster_4': 0.003215434083601286}",cluster_0
+Hortaleza,hortaleza,"{'cluster_0': 0.3512658227848101, 'cluster_1': 0.38924050632911394, 'cluster_2': 0.23734177215189872, 'cluster_3': 0.022151898734177215}",cluster_1
+Latina,latina,"{'cluster_0': 0.39636363636363636, 'cluster_1': 0.48363636363636364, 'cluster_2': 0.08727272727272728, 'cluster_3': 0.03272727272727273}",cluster_1
+Moncloa-Aravaca,moncloaaravaca,"{'cluster_0': 0.6989690721649484, 'cluster_1': 0.21443298969072164, 'cluster_2': 0.07216494845360824, 'cluster_3': 0.01443298969072165}",cluster_0
+Moratalaz,moratalaz,"{'cluster_0': 0.17647058823529413, 'cluster_1': 0.4470588235294118, 'cluster_2': 0.32941176470588235, 'cluster_3': 0.047058823529411764}",cluster_1
+Puente de Vallecas,puentedevallecas,"{'cluster_0': 0.35436893203883496, 'cluster_1': 0.49029126213592233, 'cluster_2': 0.1262135922330097, 'cluster_3': 0.02912621359223301}",cluster_1
+Retiro,retiro,"{'cluster_0': 0.075, 'cluster_1': 0.25, 'cluster_2': 0.575, 'cluster_3': 0.1}",cluster_2
+Salamanca,salamanca,"{'cluster_0': 0.023255813953488372, 'cluster_1': 0.2441860465116279, 'cluster_2': 0.6162790697674418, 'cluster_3': 0.11627906976744186}",cluster_2
+San Blas - Canillejas,sanblascanillejas,"{'cluster_0': 0.36885245901639346, 'cluster_1': 0.5573770491803278, 'cluster_2': 0.05327868852459016, 'cluster_3': 0.020491803278688523}",cluster_1
+Tetuán,tetuán,"{'cluster_0': 0.08235294117647059, 'cluster_1': 0.5058823529411764, 'cluster_2': 0.3176470588235294, 'cluster_3': 0.08235294117647059, 'cluster_4': 0.011764705882352941}",cluster_1
+Usera,usera,"{'cluster_0': 0.175, 'cluster_1': 0.6083333333333333, 'cluster_2': 0.18333333333333332, 'cluster_3': 0.03333333333333333}",cluster_1
+Vicálvaro,vicálvaro,"{'cluster_0': 0.6774193548387096, 'cluster_1': 0.23655913978494625, 'cluster_2': 0.08064516129032258, 'cluster_3': 0.005376344086021506}",cluster_0
+Villa de Vallecas,villadevallecas,"{'cluster_0': 0.5778546712802768, 'cluster_1': 0.29411764705882354, 'cluster_2': 0.12802768166089964}",cluster_0
+Villaverde,villaverde,"{'cluster_0': 0.5510204081632653, 'cluster_1': 0.3551020408163265, 'cluster_2': 0.07755102040816327, 'cluster_3': 0.0163265306122449}",cluster_0

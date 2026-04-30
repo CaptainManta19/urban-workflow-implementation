@@ -1,55 +1,72 @@
-# Urban Data Workflow MVP
+# Madrid Urban Workflow Dashboard
 
-This repository contains a small **LangGraph-based urban data workflow** for collecting, harmonising, profiling, and interpreting heterogeneous urban datasets. It is designed as a **human-in-the-loop, inspectable prototype**: data can be collected from local files and bounded manifest-declared remote sources, processed step by step, and then translated into a bounded AI-assisted interpretation summary.
+This repository contains a transparent urban data workflow for **collecting**, **feature-engineering**, and **analyzing** heterogeneous datasets about Madrid, plus a Dash dashboard for inspecting the resulting evidence.
+
+The current project architecture is centered on:
+- bounded source collection with provenance
+- explicit district- and grid-level feature tables
+- interpretable unsupervised ML
+- a dashboard that explains both data and pipeline stages
+
+The repository no longer uses the earlier LangGraph/LLM interpretation workflow as its active architecture.
 
 ## What the workflow does
 
-The workflow runs in five stages:
+The current workflow runs in these stages:
 
-1. **Collect sources** from `data/raw`
-2. **Pause for human review** of the collected sources
-3. **Process the data** through harmonisation, profiling, compatibility checking, and indicator generation
-4. **Pause for human review** before interpretation
-5. **Generate an interpretation summary** using a structured LLM step
-
-The interpretation step is intentionally bounded. It does **not** make planning decisions. It creates a structured draft and renders it into a short summary that is meant to support human review.
+1. **Collect sources** from `data/raw` and optional manifest-declared sources
+2. **Pause for human review** of collected sources and provenance
+3. **Build feature tables**
+   - `grid_features`
+   - `district_features`
+4. **Run clustering**
+   - urban form/access typology at 250m cell level
+5. **Run anomaly detection**
+   - district-level socio-spatial mismatch
+6. **Generate evaluation outputs**
+   - clustering comparison
+   - anomaly-model comparison
+7. **Inspect results in the dashboard**
 
 ## Repository structure
 
 ```text
 project-root/
+├── app.py
+├── main.py
+├── run_ml_pipeline.py
 ├── data/
 │   ├── fetched/
 │   ├── raw/
 │   └── source_manifest.json
 ├── outputs/
+│   ├── ml/
 │   └── reports/
 ├── src/
 │   ├── collection.py
-│   ├── harmonise.py
-│   ├── profile.py
-│   ├── compatibility.py
-│   ├── indicators.py
-│   ├── interpretation.py
-│   └── schemas.py
-├── main.py
-└── .env
+│   ├── feature_engineering.py
+│   ├── ml_schemas.py
+│   ├── preprocessing.py
+│   ├── dashboard_context.py
+│   ├── schemas.py
+│   └── modeling/
+│       ├── clustering.py
+│       ├── anomaly.py
+│       └── evaluation.py
+└── combined_dataset.ipynb
 ```
 
 ## Input data
 
 Supported local input formats:
-
 - `.csv`
 - `.gpkg`
 
-Place your source files in:
+Place source files in:
 
 ```text
 data/raw/
 ```
-
-The workflow automatically scans that folder and loads all supported files.
 
 Optional bounded remote sources can be declared in:
 
@@ -58,41 +75,96 @@ data/source_manifest.json
 ```
 
 Supported manifest acquisition modes:
-
 - `local_file`
 - `remote_file`
 - `api`
 
 Supported manifest formats:
-
 - `csv`
 - `geopackage`
 - `json` for tabular API-style responses, including CKAN-style `result.records`
 
-All remote sources are cached locally in:
+All remote sources are cached in:
 
 ```text
 data/fetched/
 ```
 
-This keeps the collection step inspectable and reproducible instead of depending on hidden live fetches during later processing.
+## Main outputs
 
-## Outputs
+The ML pipeline writes outputs to:
 
-Running the workflow creates these files in:
+```text
+outputs/ml/
+```
+
+Current outputs include:
+- `feature_table_specs.json`
+- `grid_features.csv`
+- `district_features.csv`
+- `grid_clusters_kmeans.csv`
+- `cluster_profiles_kmeans.json`
+- `district_cluster_mix_kmeans.csv`
+- `grid_clusters_gaussian_mixture.csv`
+- `cluster_profiles_gaussian_mixture.json`
+- `district_cluster_mix_gaussian_mixture.csv`
+- `district_anomalies_isolation_forest.csv`
+- `district_anomalies_local_outlier_factor.csv`
+- `district_anomaly_explanations_isolation_forest.json`
+- `district_anomaly_explanations_local_outlier_factor.json`
+- `model_evaluation_summary.md`
+
+Collection outputs remain in:
 
 ```text
 outputs/reports/
 ```
 
-Generated outputs:
+## Modeling design
 
-- `collection_report.json` — source acquisition, provenance, and collection-time warnings
-- `source_profiles.json` — basic profile for each processed source
-- `compatibility_report.json` — simple compatibility assessment across sources
-- `interpretation_summary.md` — bounded AI-assisted interpretation summary
+### Clustering
 
-## Setup
+The clustering layer is framed as **urban form/access typology**.
+
+V1 clustering uses:
+- simplified land use
+- mean building height
+- maximum building height
+- public transport stop count
+
+It currently compares:
+- `KMeans`
+- `GaussianMixture`
+
+### Anomaly detection
+
+The anomaly layer is framed as **district-level socio-spatial mismatch**.
+
+It combines:
+- district socioeconomic indicators
+- district environmental indicators
+- aggregated grid features
+- district typology composition shares
+
+It currently compares:
+- `IsolationForest`
+- `LocalOutlierFactor`
+
+## Dashboard
+
+The dashboard lives in:
+
+```text
+app.py
+```
+
+It is intended to:
+- show district-level and grid-level evidence
+- surface provenance and caveats
+- explain the pipeline in a dedicated pipeline mode
+- later integrate clustering and anomaly outputs into the right sidebar and topic flow
+
+## How to run
 
 ### 1. Create and activate a virtual environment
 
@@ -103,102 +175,53 @@ python -m venv .venv
 source .venv/bin/activate
 ```
 
-On Windows:
-
-```bash
-.venv\Scripts\activate
-```
-
-### 2. Install the required packages
-
-This repository includes a `requirements.txt` file with all required dependencies.
-
-Run:
+### 2. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 3. Add your Groq API key
-
-Create a `.env` file in the project root:
-
-```env
-GROQ_API_KEY=your_key_here
-```
-
-This is required for the interpretation step.
-
-## How to run the workflow
-
-From the project root, run:
+### 3. Run the collection + ML pipeline
 
 ```bash
 python main.py
 ```
 
-You will be asked to confirm two checkpoints:
+This will:
+- run source collection
+- show a human review checkpoint
+- then run feature engineering, clustering, anomaly detection, and evaluation
 
-1. after source collection
-2. before interpretation
+### 4. Run the dashboard
 
-Reply with `y` or `n`.
+```bash
+python app.py
+```
 
-- If you stop after collection, the workflow ends there.
-- If you continue, the workflow processes the sources and generates outputs.
-- If you approve the second checkpoint, it also generates the interpretation summary.
+## Provenance of the cell-based dataset
 
-## Step-by-step logic
+The research-derived 250m grid dataset used in the dashboard and ML workflow is documented in:
 
-### 1. Collection
+```text
+combined_dataset.ipynb
+```
 
-`collection.py` scans `data/raw`, loads optional manifest-declared sources, caches remote fetches to `data/fetched`, and creates a structured `CollectedSource` object for each dataset. Collection metadata includes provenance, acquisition mode, compatibility hints, and explicit warnings.
+That notebook progressively integrates:
+- Urban Atlas land use
+- Urban Atlas building height
+- OpenStreetMap-based public transport features
+- district-level rent statistics
+- district-level EMVS public housing
+- district labels
 
-### 2. Harmonisation
+This grid dataset is therefore a **derived integration product**, not a single direct source.
 
-`harmonise.py` applies lightweight cleaning:
+## Current focus
 
-- standardises column names
-- removes fully empty rows
-- updates source metadata
+The current codebase is focused on:
+- making transformations inspectable
+- preserving provenance
+- building defensible ML outputs
+- integrating those outputs into the dashboard step by step
 
-### 3. Profiling
-
-`profile.py` creates JSON-friendly source profiles with basic metadata, missing values, and source information.
-
-### 4. Compatibility check
-
-`compatibility.py` compares the available sources and reports whether they can be directly integrated. In the current MVP, this is mainly used to highlight limitations and suggest next steps.
-
-### 5. Indicator generation
-
-`indicators.py` creates simple source-specific indicators.
-
-Current logic:
-
-- tabular transport data → transport mode summary
-- geospatial land-use data → land-use area summary
-
-### 6. Interpretation
-
-`interpretation.py` builds a compact interpretation context from the processed outputs, sends it to the LLM as a structured task, validates the result with Pydantic, and renders it into markdown.
-
-## Workflow design
-
-The workflow is orchestrated in `main.py` with **LangGraph** and uses a shared **Pydantic state model** from `schemas.py`.
-
-This keeps the MVP explicit and inspectable:
-
-- workflow steps are separate nodes
-- human review points remain in the loop
-- interpretation is structured and validated
-- outputs are saved as files for inspection
-
-## Current limitations
-
-This repository is intentionally small in scope.
-
-- Remote collection is bounded to manifest-declared sources rather than open-ended autonomous web discovery
-- It currently supports CSV, GeoPackage, and tabular JSON collection paths
-- Indicator generation is source-specific and limited to the current example datasets
-- The interpretation step is assistive, not autonomous
+The ML outputs should be treated as exploratory analytical layers, not automated planning decisions.

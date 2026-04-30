@@ -1,50 +1,22 @@
-import json
-import re
-import sqlite3
-import struct
-from pathlib import Path
 from urllib.parse import quote
 
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from dash import ALL, Dash, Input, Output, State, callback_context, dcc, html, no_update
-from pyproj import Geod, Transformer
+
+from src.dashboard_context import build_dashboard_datasets
+from src.feature_engineering import normalise_district_name
 
 
-PROJECT_ROOT = Path(__file__).resolve().parent
-BOUNDARIES_PATH = PROJECT_ROOT / "data" / "fetched" / "madrid_district_boundaries.json"
-POPULATION_PATH = PROJECT_ROOT / "data" / "fetched" / "madrid_population_district_barrio_api.json"
-INDICATOR_PANEL_PATH = PROJECT_ROOT / "data" / "fetched" / "madrid_district_indicator_panel_api.json"
-HOUSING_PATH = PROJECT_ROOT / "data" / "raw" / "emvs_housing.csv"
-GRID_GPKG_PATH = PROJECT_ROOT / "data" / "raw" / "madrid_grid_250m_lu_height_transport_rent_emvs_district.gpkg"
 DEFAULT_DISTRICT = "Centro"
 DEFAULT_TOPIC = "population"
-GEOD = Geod(ellps="WGS84")
-GRID_TRANSFORMER = Transformer.from_crs(3035, 4326, always_xy=True)
 DEFAULT_MOBILITY_THRESHOLD = 2
 MOBILITY_SLIDER_MAX = 10
 MAP_UIREVISION = "district-map-shared-view"
 DEFAULT_VIEW_MODE = "display"
 DEFAULT_DISPLAY_SELECTION_MODE = "inspect"
 DEFAULT_PIPELINE_STAGE = "representation"
-
-
-def parse_spanish_int(value: str) -> int:
-    return int(str(value).replace(".", "").strip())
-
-
-def parse_spanish_float(value: str | int | float | None) -> float | None:
-    if value is None:
-        return None
-    text = str(value).strip()
-    if not text:
-        return None
-    text = text.replace(".", "").replace(",", ".")
-    try:
-        return float(text)
-    except ValueError:
-        return None
 
 
 def build_lucide_icon(svg_inner: str) -> html.Img:
@@ -71,458 +43,17 @@ def build_lucide_icon_data_uri(svg_inner: str, stroke: str = "#111827") -> str:
         f"{svg_inner}</svg>"
     )
     return f"data:image/svg+xml;utf8,{quote(svg)}"
-
-
-def normalise_district_name(value: str) -> str:
-    return re.sub(r"[\s-]+", "", str(value).casefold())
-
-
-def extract_year(text: str | None) -> int | None:
-    if not text:
-        return None
-    match = re.search(r"(19|20)\d{2}", str(text))
-    return int(match.group(0)) if match else None
-
-
-def decode_arc(arc_index: int, arcs: list, scale: list[float], translate: list[float]) -> list[list[float]]:
-    source_arc = arcs[arc_index] if arc_index >= 0 else arcs[~arc_index]
-    x = 0
-    y = 0
-    coordinates: list[list[float]] = []
-
-    for dx, dy in source_arc:
-        x += dx
-        y += dy
-        coordinates.append(
-            [
-                translate[0] + x * scale[0],
-                translate[1] + y * scale[1],
-            ]
-        )
-
-    if arc_index < 0:
-        coordinates = list(reversed(coordinates))
-
-    return coordinates
-
-
-def build_ring(arc_indices: list[int], arcs: list, scale: list[float], translate: list[float]) -> list[list[float]]:
-    ring: list[list[float]] = []
-
-    for position, arc_index in enumerate(arc_indices):
-        coordinates = decode_arc(arc_index, arcs, scale, translate)
-        if position > 0:
-            coordinates = coordinates[1:]
-        ring.extend(coordinates)
-
-    if ring and ring[0] != ring[-1]:
-        ring.append(ring[0])
-
-    return ring
-
-
-def load_district_geojson() -> dict:
-    with BOUNDARIES_PATH.open("r", encoding="utf-8") as file_handle:
-        topology = json.load(file_handle)
-
-    scale = topology["transform"]["scale"]
-    translate = topology["transform"]["translate"]
-    arcs = topology["arcs"]
-    geometries = topology["objects"]["Distritos"]["geometries"]
-
-    features = []
-    for geometry in geometries:
-        polygon_coordinates = [
-            build_ring(ring_arc_indices, arcs, scale, translate)
-            for ring_arc_indices in geometry["arcs"]
-        ]
-        properties = geometry["properties"]
-        features.append(
-            {
-                "type": "Feature",
-                "id": properties["NOMBRE"],
-                "properties": properties,
-                "geometry": {
-                    "type": "Polygon",
-                    "coordinates": polygon_coordinates,
-                },
-            }
-        )
-
-    return {"type": "FeatureCollection", "features": features}
-
-
-def geopackage_envelope_size(flags: int) -> int:
-    envelope_code = (flags >> 1) & 0b111
-    if envelope_code == 0:
-        return 0
-    if envelope_code == 1:
-        return 32
-    if envelope_code in (2, 3):
-        return 48
-    if envelope_code == 4:
-        return 64
-    raise ValueError(f"Unsupported GeoPackage envelope code: {envelope_code}")
-
-
-def parse_wkb_polygon(data: bytes, offset: int) -> list[list[tuple[float, float]]]:
-    endian_flag = data[offset]
-    byte_order = "<" if endian_flag == 1 else ">"
-    wkb_type = struct.unpack(f"{byte_order}I", data[offset + 1:offset + 5])[0]
-    if wkb_type != 3:
-        raise ValueError(f"Unsupported WKB geometry type: {wkb_type}")
-
-    ring_count = struct.unpack(f"{byte_order}I", data[offset + 5:offset + 9])[0]
-    cursor = offset + 9
-    rings: list[list[tuple[float, float]]] = []
-    for _ in range(ring_count):
-        point_count = struct.unpack(f"{byte_order}I", data[cursor:cursor + 4])[0]
-        cursor += 4
-        ring: list[tuple[float, float]] = []
-        for _ in range(point_count):
-            x = struct.unpack(f"{byte_order}d", data[cursor:cursor + 8])[0]
-            y = struct.unpack(f"{byte_order}d", data[cursor + 8:cursor + 16])[0]
-            cursor += 16
-            ring.append((x, y))
-        rings.append(ring)
-    return rings
-
-
-def parse_geopackage_polygon(blob: bytes) -> list[list[list[float]]]:
-    if blob[:2] != b"GP":
-        raise ValueError("Unsupported geometry blob format")
-    flags = blob[3]
-    header_size = 8 + geopackage_envelope_size(flags)
-    rings_projected = parse_wkb_polygon(blob, header_size)
-    rings_lon_lat: list[list[list[float]]] = []
-    for ring in rings_projected:
-        transformed_ring = []
-        for x, y in ring:
-            lon, lat = GRID_TRANSFORMER.transform(x, y)
-            transformed_ring.append([lon, lat])
-        rings_lon_lat.append(transformed_ring)
-    return rings_lon_lat
-
-
-def load_grid_layer() -> tuple[pd.DataFrame, dict]:
-    query = """
-        SELECT
-            cell_id,
-            geom,
-            lu_2018_class_simplified,
-            height_mean,
-            height_max,
-            pt_stop_count,
-            pt_access_good,
-            district_name
-        FROM grid_250m_lu_height_transport_rent_emvs_district
-        WHERE district_name IS NOT NULL
-    """
-    rows = []
-    features = []
-    with sqlite3.connect(GRID_GPKG_PATH) as connection:
-        cursor = connection.cursor()
-        for cell_id, geom_blob, land_use_class, height_mean, height_max, pt_stop_count, pt_access_good, district_name in cursor.execute(query):
-            polygon_coordinates = parse_geopackage_polygon(geom_blob)
-            district_key = normalise_district_name(district_name)
-            canonical_district_name = DISTRICT_NAME_BY_KEY.get(district_key, district_name)
-            rows.append(
-                {
-                    "cell_id": cell_id,
-                    "district_name": canonical_district_name,
-                    "district_key": normalise_district_name(canonical_district_name),
-                    "lu_2018_class_simplified": land_use_class,
-                    "height_mean": height_mean,
-                    "height_max": height_max,
-                    "pt_stop_count": int(pt_stop_count),
-                    "pt_access_good": bool(pt_access_good),
-                }
-            )
-            features.append(
-                {
-                    "type": "Feature",
-                    "id": cell_id,
-                    "properties": {
-                        "cell_id": cell_id,
-                        "district_name": canonical_district_name,
-                        "lu_2018_class_simplified": land_use_class,
-                        "height_mean": height_mean,
-                        "height_max": height_max,
-                        "pt_stop_count": int(pt_stop_count),
-                        "pt_access_good": bool(pt_access_good),
-                    },
-                    "geometry": {
-                        "type": "Polygon",
-                        "coordinates": polygon_coordinates,
-                    },
-                }
-            )
-
-    return pd.DataFrame(rows), {"type": "FeatureCollection", "features": features}
-
-
-def compute_polygon_area_m2(geometry: dict) -> float | None:
-    if geometry.get("type") != "Polygon":
-        return None
-
-    rings = geometry.get("coordinates", [])
-    if not rings:
-        return None
-
-    outer_ring = rings[0]
-    if len(outer_ring) < 4:
-        return None
-
-    longitudes = [point[0] for point in outer_ring]
-    latitudes = [point[1] for point in outer_ring]
-    area_m2, _ = GEOD.polygon_area_perimeter(longitudes, latitudes)
-    return abs(area_m2)
-
-
-def compute_polygon_centroid(geometry: dict) -> tuple[float | None, float | None]:
-    if geometry.get("type") != "Polygon":
-        return None, None
-
-    rings = geometry.get("coordinates", [])
-    if not rings or not rings[0]:
-        return None, None
-
-    outer_ring = rings[0]
-    longitudes = [point[0] for point in outer_ring]
-    latitudes = [point[1] for point in outer_ring]
-    return sum(longitudes) / len(longitudes), sum(latitudes) / len(latitudes)
-
-
-def load_population_frame() -> pd.DataFrame:
-    with POPULATION_PATH.open("r", encoding="utf-8") as file_handle:
-        payload = json.load(file_handle)
-
-    rows = payload["result"]["records"]
-    district_rows = [
-        row
-        for row in rows
-        if row.get("distrito") == row.get("barrio")
-        and str(row.get("cod_distrito", "")).isdigit()
-    ]
-    latest_year = max(
-        extract_year(row.get("fecha"))
-        for row in district_rows
-        if extract_year(row.get("fecha")) is not None
-    )
-    district_rows = [
-        row
-        for row in district_rows
-        if extract_year(row.get("fecha")) == latest_year
-    ]
-
-    frame = pd.DataFrame(district_rows)
-    frame["population_total"] = frame["num_personas"].apply(parse_spanish_int)
-    frame["population_male"] = frame["num_personas_hombres"].apply(parse_spanish_int)
-    frame["population_female"] = frame["num_personas_mujeres"].apply(parse_spanish_int)
-    frame["district_code"] = frame["cod_distrito"].astype(int)
-    frame["district_name"] = frame["distrito"]
-    frame["district_key"] = frame["district_name"].apply(normalise_district_name)
-    frame["reference_date"] = frame["fecha"]
-
-    return frame[
-        [
-            "district_code",
-            "district_name",
-            "district_key",
-            "reference_date",
-            "population_total",
-            "population_male",
-            "population_female",
-        ]
-    ].sort_values("district_code")
-
-
-def load_indicator_panel_rows() -> list[dict]:
-    with INDICATOR_PANEL_PATH.open("r", encoding="utf-8") as file_handle:
-        payload = json.load(file_handle)
-
-    rows = payload["result"]["records"]
-    district_rows = []
-    for row in rows:
-        code = str(row.get("cod_distrito", "")).strip()
-        if not code.isdigit():
-            continue
-        if int(code) < 1 or int(code) > 21:
-            continue
-        if row.get("barrio") not in (None, "", "null"):
-            continue
-        district_rows.append(row)
-
-    return district_rows
-
-
-def extract_latest_indicator_frame(
-    rows: list[dict],
-    indicator_name: str,
-    value_column_name: str,
-) -> pd.DataFrame:
-    indicator_rows = [
-        row for row in rows
-        if row.get("indicador_completo") == indicator_name
-    ]
-    if not indicator_rows:
-        return pd.DataFrame(columns=["district_key", value_column_name, f"{value_column_name}_year"])
-
-    latest_year = max(
-        int(str(row["ano"]))
-        for row in indicator_rows
-        if str(row.get("ano", "")).isdigit()
-    )
-    latest_rows = [
-        row for row in indicator_rows
-        if str(row.get("ano", "")) == str(latest_year)
-    ]
-
-    frame = pd.DataFrame(latest_rows)
-    if "Periodo panel" in frame.columns:
-        frame["panel_year"] = frame["Periodo panel"].apply(parse_spanish_float)
-        frame = frame.sort_values(by=["panel_year", "_id"], ascending=[True, True], na_position="last")
-    frame["district_key"] = frame["distrito"].apply(normalise_district_name)
-    frame = frame.drop_duplicates(subset=["district_key"], keep="last")
-    frame[value_column_name] = frame["valor_indicador"].apply(parse_spanish_float)
-    frame[f"{value_column_name}_year"] = latest_year
-    return frame[["district_key", value_column_name, f"{value_column_name}_year"]]
-
-
-def load_housing_frame() -> pd.DataFrame:
-    frame = pd.read_csv(HOUSING_PATH, sep=";", encoding="utf-8", header=1)
-    frame = frame.rename(
-        columns={
-            "DISTRITOS": "district_name",
-            "TOTAL": "housing_total",
-            "REGLAMENTO ADJUDICACION": "housing_regulation",
-            "RESTO PROGRAMAS": "housing_other_programs",
-        }
-    )
-    frame = frame[frame["district_name"] != "TOTAL"].copy()
-    frame["district_key"] = frame["district_name"].apply(normalise_district_name)
-    for column in ("housing_total", "housing_regulation", "housing_other_programs"):
-        frame[column] = pd.to_numeric(frame[column], errors="coerce")
-    return frame[
-        [
-            "district_name",
-            "district_key",
-            "housing_total",
-            "housing_regulation",
-            "housing_other_programs",
-        ]
-    ]
-
-
-def build_district_frame() -> pd.DataFrame:
-    geojson = load_district_geojson()
-    population = load_population_frame()
-    housing = load_housing_frame()
-    indicator_rows = load_indicator_panel_rows()
-    green_total = extract_latest_indicator_frame(
-        indicator_rows,
-        "Superficie de zonas verdes y parques de distrito (ha.)",
-        "green_area_ha",
-    )
-    green_rate = extract_latest_indicator_frame(
-        indicator_rows,
-        "Superficie de zonas verdes y parques de distrito (ha.) entre número de habitantes *10.000",
-        "green_area_per_10000",
-    )
-    income_person = extract_latest_indicator_frame(
-        indicator_rows,
-        "Renta media disponible por persona",
-        "income_per_person",
-    )
-    household_income = extract_latest_indicator_frame(
-        indicator_rows,
-        "Renta neta media anual de los hogares (Urban Audit)",
-        "household_income",
-    )
-    unemployment_total = extract_latest_indicator_frame(
-        indicator_rows,
-        "Paro registrado (número de personas registradas en SEPE en febrero)",
-        "unemployment_total",
-    )
-    unemployment_rate = extract_latest_indicator_frame(
-        indicator_rows,
-        "Tasa absoluta de paro registrado (febrero)",
-        "unemployment_rate",
-    )
-    vulnerability_total = extract_latest_indicator_frame(
-        indicator_rows,
-        "Índice de vulnerabilidad territorial agregado",
-        "vulnerability_index",
-    )
-    vulnerability_employment = extract_latest_indicator_frame(
-        indicator_rows,
-        "Índice de vulnerabilidad economía y empleo",
-        "vulnerability_employment",
-    )
-    area_rows = []
-    for feature in geojson["features"]:
-        centroid_lon, centroid_lat = compute_polygon_centroid(feature["geometry"])
-        area_rows.append(
-            {
-                "district_name": feature["properties"]["NOMBRE"],
-                "district_key": normalise_district_name(feature["properties"]["NOMBRE"]),
-                "area_m2": compute_polygon_area_m2(feature["geometry"]),
-                "centroid_lon": centroid_lon,
-                "centroid_lat": centroid_lat,
-            }
-        )
-
-    area_frame = pd.DataFrame(area_rows)
-    merged = area_frame.merge(population, on="district_key", how="left", suffixes=("_boundary", ""))
-    merged["district_name"] = merged["district_name_boundary"]
-    merged["area_km2"] = merged["area_m2"] / 1_000_000
-    merged["population_density_km2"] = (
-        merged["population_total"] / merged["area_km2"]
-    ).round(0)
-    merged = merged.merge(
-        housing.drop(columns=["district_name"]),
-        on="district_key",
-        how="left",
-    )
-    for indicator_frame in (
-        green_total,
-        green_rate,
-        income_person,
-        household_income,
-        unemployment_total,
-        unemployment_rate,
-        vulnerability_total,
-        vulnerability_employment,
-    ):
-        merged = merged.merge(indicator_frame, on="district_key", how="left")
-    merged["housing_per_1000_residents"] = (
-        merged["housing_total"] / merged["population_total"] * 1000
-    ).round(2)
-    merged["has_population_data"] = merged["population_total"].notna()
-    merged["has_housing_data"] = merged["housing_total"].notna()
-    merged["has_green_data"] = merged["green_area_per_10000"].notna()
-    merged["has_economy_data"] = merged["income_per_person"].notna()
-    merged["has_employment_data"] = merged["unemployment_rate"].notna()
-    merged["has_vulnerability_data"] = merged["vulnerability_index"].notna()
-
-    return merged
-
-
-DISTRICT_GEOJSON = load_district_geojson()
-DISTRICT_FRAME = build_district_frame()
+DASHBOARD_DATASETS = build_dashboard_datasets()
+DISTRICT_GEOJSON = DASHBOARD_DATASETS["district_geojson"]
+GRID_FRAME = DASHBOARD_DATASETS["grid_frame"]
+DISTRICT_FRAME = DASHBOARD_DATASETS["district_frame"]
 DISTRICT_NAME_BY_KEY = {
     normalise_district_name(name): name
     for name in DISTRICT_FRAME["district_name"].drop_duplicates()
 }
-GRID_FRAME, GRID_GEOJSON = load_grid_layer()
-MOBILITY_GRID_FRAME = GRID_FRAME[GRID_FRAME["pt_stop_count"] > 0].copy()
-MOBILITY_GRID_GEOJSON = {
-    "type": "FeatureCollection",
-    "features": [
-        feature for feature in GRID_GEOJSON["features"]
-        if feature["properties"]["pt_stop_count"] > 0
-    ],
-}
+GRID_GEOJSON = DASHBOARD_DATASETS["grid_geojson"]
+MOBILITY_GRID_FRAME = DASHBOARD_DATASETS["mobility_grid_frame"]
+MOBILITY_GRID_GEOJSON = DASHBOARD_DATASETS["mobility_grid_geojson"]
 MOBILITY_MAX_THRESHOLD = int(MOBILITY_GRID_FRAME["pt_stop_count"].max())
 LAND_USE_COLOR_MAP = {
     "Herbaceous vegetation associations (natural grassland, moors...)": "#d7ead2",
@@ -540,26 +71,10 @@ LAND_USE_COLOR_MAP = {
 LAND_USE_ALL_VALUE = "__all__"
 
 
-def build_grid_caches(frame: pd.DataFrame, geojson: dict) -> tuple[dict[str, pd.DataFrame], dict[str, dict]]:
-    frame_cache: dict[str, pd.DataFrame] = {}
-    geojson_cache: dict[str, dict] = {}
-    for district_name in sorted(frame["district_name"].dropna().unique()):
-        district_frame = frame[frame["district_name"] == district_name].copy()
-        frame_cache[district_name] = district_frame
-        district_cell_ids = set(district_frame["cell_id"].tolist())
-        geojson_cache[district_name] = {
-            "type": "FeatureCollection",
-            "features": [
-                feature
-                for feature in geojson["features"]
-                if feature["properties"]["cell_id"] in district_cell_ids
-            ],
-        }
-    return frame_cache, geojson_cache
-
-
-LAND_USE_DISTRICT_FRAME_CACHE, LAND_USE_DISTRICT_GEOJSON_CACHE = build_grid_caches(GRID_FRAME, GRID_GEOJSON)
-MOBILITY_DISTRICT_FRAME_CACHE, MOBILITY_DISTRICT_GEOJSON_CACHE = build_grid_caches(MOBILITY_GRID_FRAME, MOBILITY_GRID_GEOJSON)
+LAND_USE_DISTRICT_FRAME_CACHE = DASHBOARD_DATASETS["land_use_district_frame_cache"]
+LAND_USE_DISTRICT_GEOJSON_CACHE = DASHBOARD_DATASETS["land_use_district_geojson_cache"]
+MOBILITY_DISTRICT_FRAME_CACHE = DASHBOARD_DATASETS["mobility_district_frame_cache"]
+MOBILITY_DISTRICT_GEOJSON_CACHE = DASHBOARD_DATASETS["mobility_district_geojson_cache"]
 
 
 def build_metric_options(topic: str) -> list[dict[str, str]]:
@@ -2017,28 +1532,28 @@ PIPELINE_STAGES = [
     {
         "id": "source_intake",
         "title": "Source intake",
-        "subtitle": "Collect topic inputs",
+        "subtitle": "Collect bounded sources",
         "status": "Complete",
         "icon": PIPELINE_STAGE_SOURCE_ICON,
     },
     {
         "id": "cleaning",
-        "title": "Cleaning & harmonisation",
-        "subtitle": "Standardise formats",
+        "title": "Preprocessing & rules",
+        "subtitle": "Standardise and align",
         "status": "Complete",
         "icon": PIPELINE_STAGE_CLEANING_ICON,
     },
     {
         "id": "topic_preparation",
-        "title": "Topic preparation",
-        "subtitle": "Prepare view-ready metrics",
+        "title": "Feature engineering",
+        "subtitle": "Build analysis tables",
         "status": "Active",
         "icon": PIPELINE_STAGE_PREP_ICON,
     },
     {
         "id": "validation",
-        "title": "Validation & uncertainty",
-        "subtitle": "Check quality & caveats",
+        "title": "Modeling & evaluation",
+        "subtitle": "Typologies and checks",
         "status": "Complete",
         "icon": PIPELINE_STAGE_VALIDATE_ICON,
     },
@@ -2313,7 +1828,7 @@ def build_pipeline_prompt_panel(district_name: str) -> html.Div:
                     html.H4("District in focus"),
                     html.P(f"{district_name} is ready for pipeline inspection."),
                     html.H4("Next step"),
-                    html.P("Choose a topic to see how its data moves from source intake to final representation."),
+                    html.P("Choose a topic to see how collected sources become feature tables, model inputs, and final dashboard evidence."),
                 ],
                 className="panel-body",
             ),
@@ -2327,7 +1842,7 @@ def build_pipeline_empty_state() -> html.Div:
         [
             html.Div("Pipeline mode", className="pipeline-empty-title"),
             html.Div(
-                "Select 1 district to inspect how a topic moves from source intake to final dashboard representation.",
+                "Select 1 district to inspect how a topic moves from source intake through feature engineering and model evaluation into the dashboard.",
                 className="pipeline-empty-text",
             ),
         ],
@@ -2348,43 +1863,43 @@ def build_pipeline_stage_panel(stage_id: str, topic: str | None, district_name: 
     stage_text_map = {
         "source_intake": {
             "provenance": f"{topic_source}. District focus: {district_name}.",
-            "action": f"Collect the source inputs required for the {topic_label.lower()} view and attach them to the selected district context.",
+            "action": f"Collect the bounded source inputs required for the {topic_label.lower()} view and register their provenance before any transformation happens.",
             "notes": [
                 "Keep the selected district explicit from the beginning.",
-                "Record whether the topic comes from official district data or a processed spatial layer.",
+                "Record whether the topic comes from official district data or the research-derived 250m grid layer.",
                 "Surface missing source coverage before later stages hide it.",
             ],
             "why": "This stage makes the input origin visible before any transformation happens.",
         },
         "cleaning": {
-            "provenance": f"Standardisation rules for the {topic_label.lower()} topic before display.",
-            "action": "Normalise names, formats, units, and district keys so the topic can be joined and compared consistently.",
+            "provenance": f"Preprocessing and compatibility rules for the {topic_label.lower()} topic.",
+            "action": "Normalise names, formats, units, and spatial keys so district-level and grid-level sources can be aligned consistently.",
             "notes": [
                 "District names are canonicalised across files.",
                 "Missing or non-matching values are flagged instead of dropped silently.",
-                "Only the fields needed for this dashboard topic are carried forward.",
+                "Inherited district-level values remain distinguishable from observed cell-level values.",
             ],
             "why": "This stage keeps the dashboard readable by preventing mismatched labels and hidden data loss.",
         },
         "topic_preparation": {
-            "provenance": f"Topic-specific preparation for {topic_label.lower()} in {district_name}.",
-            "action": "Translate cleaned inputs into the exact metric or spatial evidence used by the selected topic view.",
+            "provenance": f"Topic-specific features prepared for {topic_label.lower()} in {district_name}.",
+            "action": "Translate cleaned inputs into shared district and grid feature tables that power the selected topic view and later ML steps.",
             "notes": [
-                "District-native topics prepare one comparable district metric.",
-                "Grid topics prepare 250m cells filtered to the selected district.",
-                "Topic-specific controls, such as thresholds or class filters, are applied here.",
+                "District-native topics read from the district feature table.",
+                "Grid topics read from the 250m grid feature table filtered to the selected district.",
+                "Topic-specific controls, such as thresholds or class filters, are applied on top of shared features.",
             ],
             "why": "This is where raw inputs become the view-ready representation users actually inspect.",
         },
         "validation": {
-            "provenance": f"Quality and uncertainty review for {topic_label.lower()}.",
-            "action": "Check missing-data cases, outlier handling, and the limits of what the topic can claim.",
+            "provenance": f"Modeling and evaluation context for {topic_label.lower()}.",
+            "action": "Check quality, caveats, and when relevant how the topic contributes to clustering, anomaly detection, and model evaluation outputs.",
             "notes": [
                 "Districts without matching values remain visible and marked as unavailable.",
                 "Research-derived layers are labelled as processed spatial evidence.",
-                "Caveats are kept visible in the right panel rather than hidden in metadata.",
+                "Model evaluation warnings stay visible so unstable outputs are not presented as settled facts.",
             ],
-            "why": "This stage supports explainability by making limits and uncertainty explicit before interpretation.",
+            "why": "This stage supports explainability by making limits, caveats, and model uncertainty explicit before the dashboard presents them.",
         },
         "representation": {
             "provenance": f"Final dashboard translation for {topic_label.lower()} in {district_name}.",

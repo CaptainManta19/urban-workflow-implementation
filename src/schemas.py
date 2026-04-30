@@ -1,5 +1,6 @@
 from datetime import datetime
 from typing import Any, Literal
+
 from pydantic import BaseModel, Field, model_validator
 
 
@@ -151,80 +152,3 @@ class SourceSpecification(BaseModel):
 
 class SourceManifest(BaseModel):
     sources: list[SourceSpecification] = Field(default_factory=list)
-
-
-class HumanReviewState(BaseModel):
-    after_collection: bool = False
-    before_interpretation: bool = False
-
-
-class ProcessedSourceSummary(BaseModel):
-    source_id: str
-    source_name: str
-    source_type: SourceType
-    file_format: str
-    row_count: int
-    column_count: int
-
-
-class IndicatorHighlight(BaseModel):
-    source_id: str
-    source_name: str
-    indicator_name: str
-    headline: str
-    interpretation_note: str
-
-
-class IndicatorSelectionEntry(BaseModel):
-    indicator_id: str
-    indicator_name: str
-    status: Literal["selected", "skipped", "empty_result"]
-    description: str
-    applicability_reason: str
-    output_names: list[str] = Field(default_factory=list)
-    tradeoffs: dict[str, str] = Field(default_factory=dict)
-
-
-class IndicatorSourceReport(BaseModel):
-    source_id: str
-    source_name: str
-    source_type: SourceType
-    selected_indicators: list[IndicatorSelectionEntry] = Field(default_factory=list)
-    skipped_indicators: list[IndicatorSelectionEntry] = Field(default_factory=list)
-
-
-class IndicatorSelectionReport(BaseModel):
-    status: Literal["completed", "warning"]
-    generated_at: datetime
-    source_count: int
-    sources: list[IndicatorSourceReport] = Field(default_factory=list)
-    workflow_notes: list[str] = Field(default_factory=list)
-
-
-class InterpretationDraft(BaseModel):
-    purpose: str
-    processed_sources: list[ProcessedSourceSummary] = Field(default_factory=list)
-    indicator_highlights: list[IndicatorHighlight] = Field(default_factory=list)
-
-    compatibility_limits: list[str] = Field(default_factory=list)
-    integration_requirements: list[str] = Field(default_factory=list)
-
-    next_step: str
-    human_review_note: str
-
-
-class UrbanWorkflowState(BaseModel):
-    sources: list[CollectedSource] = Field(default_factory=list)
-    collection_report: dict = Field(default_factory=dict)
-    harmonised_sources: list[CollectedSource] = Field(default_factory=list)
-
-    profiles: list[dict] = Field(default_factory=list)
-    # `build_compatibility_report()` always returns a dict; keep this non-optional
-    # so downstream nodes (e.g. interpretation) can safely type-check.
-    compatibility_report: dict = Field(default_factory=dict)
-    indicator_results: dict = Field(default_factory=dict)
-    indicator_report: dict = Field(default_factory=dict)
-    interpretation_draft: InterpretationDraft | None = None
-    interpretation_summary: str | None = None
-
-    human_review: HumanReviewState = Field(default_factory=HumanReviewState)
