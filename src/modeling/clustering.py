@@ -8,7 +8,6 @@ from sklearn.cluster import KMeans
 from sklearn.compose import ColumnTransformer
 from sklearn.impute import SimpleImputer
 from sklearn.metrics import silhouette_score
-from sklearn.mixture import GaussianMixture
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import OneHotEncoder, StandardScaler
 
@@ -298,44 +297,6 @@ def fit_kmeans_typology(
         district_cluster_mix=build_district_cluster_mix(labeled_eligible, "cluster_label"),
         silhouette=silhouette,
     )
-
-
-def fit_gaussian_mixture_typology(
-    grid_features: pd.DataFrame,
-    cluster_count: int = DEFAULT_CLUSTER_COUNT,
-    random_state: int = DEFAULT_RANDOM_STATE,
-    config: ClusteringConfig | None = None,
-) -> ClusteringArtifacts:
-    prepared = prepare_clustering_data(grid_features, config=config)
-    model = GaussianMixture(
-        n_components=cluster_count,
-        covariance_type="full",
-        random_state=random_state,
-    )
-    model.fit(prepared.feature_matrix)
-    probabilities = model.predict_proba(prepared.feature_matrix)
-    cluster_labels = probabilities.argmax(axis=1)
-    max_probabilities = probabilities.max(axis=1)
-    labeled = attach_cluster_assignments(
-        grid_features,
-        prepared.eligible_frame,
-        cluster_labels,
-        probability_values=max_probabilities,
-    )
-    labeled_eligible = labeled.loc[labeled["cluster_label"].notna()].copy()
-    silhouette = None
-    if labeled_eligible["cluster_label"].nunique() > 1:
-        silhouette = float(silhouette_score(prepared.feature_matrix, cluster_labels))
-
-    return ClusteringArtifacts(
-        model_name="gaussian_mixture",
-        cluster_count=cluster_count,
-        labeled_grid_features=labeled,
-        cluster_profiles=build_cluster_profiles(labeled_eligible, "cluster_label"),
-        district_cluster_mix=build_district_cluster_mix(labeled_eligible, "cluster_label"),
-        silhouette=silhouette,
-    )
-
 
 def save_clustering_artifacts(
     artifacts: ClusteringArtifacts,

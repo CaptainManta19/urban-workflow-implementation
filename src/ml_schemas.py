@@ -5,7 +5,7 @@ from pydantic import BaseModel, Field
 
 FieldStatus = Literal["raw", "cleaned", "derived", "model_generated"]
 SpatialResolution = Literal["district", "grid_cell", "mixed"]
-ModelName = Literal["kmeans", "gaussian_mixture", "isolation_forest", "local_outlier_factor"]
+ModelName = Literal["kmeans", "isolation_forest"]
 
 
 class FeatureLineage(BaseModel):
@@ -112,7 +112,6 @@ class DistrictFeatureRecord(BaseModel):
 
 class ClusteringConfig(BaseModel):
     primary_model: ModelName = "kmeans"
-    comparison_model: ModelName = "gaussian_mixture"
     feature_columns: list[str] = Field(
         default_factory=lambda: [
             "lu_2018_class_simplified",
@@ -139,7 +138,6 @@ class ClusteringConfig(BaseModel):
 
 class AnomalyConfig(BaseModel):
     primary_model: ModelName = "isolation_forest"
-    comparison_model: ModelName = "local_outlier_factor"
     feature_columns: list[str] = Field(
         default_factory=lambda: [
             "population_density_km2",

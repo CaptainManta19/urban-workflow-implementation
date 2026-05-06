@@ -24,8 +24,8 @@ The current workflow runs in these stages:
 5. **Run anomaly detection**
    - district-level socio-spatial mismatch
 6. **Generate evaluation outputs**
-   - clustering comparison
-   - anomaly-model comparison
+   - clustering evaluation
+   - anomaly evaluation
 7. **Inspect results in the dashboard**
 
 ## Repository structure
@@ -105,13 +105,8 @@ Current outputs include:
 - `grid_clusters_kmeans.csv`
 - `cluster_profiles_kmeans.json`
 - `district_cluster_mix_kmeans.csv`
-- `grid_clusters_gaussian_mixture.csv`
-- `cluster_profiles_gaussian_mixture.json`
-- `district_cluster_mix_gaussian_mixture.csv`
 - `district_anomalies_isolation_forest.csv`
-- `district_anomalies_local_outlier_factor.csv`
 - `district_anomaly_explanations_isolation_forest.json`
-- `district_anomaly_explanations_local_outlier_factor.json`
 - `model_evaluation_summary.md`
 
 Collection outputs remain in:
@@ -132,9 +127,8 @@ V1 clustering uses:
 - maximum building height
 - public transport stop count
 
-It currently compares:
+The current dashboard baseline keeps:
 - `KMeans`
-- `GaussianMixture`
 
 ### Anomaly detection
 
@@ -146,9 +140,8 @@ It combines:
 - aggregated grid features
 - district typology composition shares
 
-It currently compares:
+The current exploratory baseline keeps:
 - `IsolationForest`
-- `LocalOutlierFactor`
 
 ## Dashboard
 

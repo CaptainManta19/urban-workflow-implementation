@@ -314,6 +314,10 @@ def load_housing_frame() -> pd.DataFrame:
 
 
 def load_grid_frame() -> pd.DataFrame:
+    district_name_lookup = {
+        normalise_district_name(feature["properties"]["NOMBRE"]): feature["properties"]["NOMBRE"]
+        for feature in load_district_geojson()["features"]
+    }
     query = f"""
         SELECT
             cell_id,
@@ -344,11 +348,12 @@ def load_grid_frame() -> pd.DataFrame:
             emvs_units_total,
             district_name,
         ) in cursor.execute(query):
+            district_key = normalise_district_name(district_name)
             rows.append(
                 {
                     "cell_id": str(cell_id),
-                    "district_name": district_name,
-                    "district_key": normalise_district_name(district_name),
+                    "district_name": district_name_lookup.get(district_key, district_name),
+                    "district_key": district_key,
                     "lu_2018_class": land_use_class,
                     "lu_2018_class_simplified": land_use_class_simplified,
                     "height_mean": height_mean,

@@ -5,3 +5,4 @@ pandas
 geopandas
 pyogrio
 pyproj
+shapely

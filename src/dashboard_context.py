@@ -1,11 +1,15 @@
+import ast
+import json
 import sqlite3
 import struct
+from pathlib import Path
 
 import pandas as pd
 from pyproj import Transformer
 
 from src.feature_engineering import (
     GRID_GPKG_PATH,
+    OUTPUT_DIR,
     build_feature_tables,
     load_district_geojson,
 )
@@ -13,6 +17,9 @@ from src.feature_engineering import (
 
 GRID_TRANSFORMER = Transformer.from_crs(3035, 4326, always_xy=True)
 GRID_LAYER_NAME = "grid_250m_lu_height_transport_rent_emvs_district"
+CLUSTER_PROFILES_PATH = OUTPUT_DIR / "cluster_profiles_kmeans.json"
+DISTRICT_CLUSTER_MIX_PATH = OUTPUT_DIR / "district_cluster_mix_kmeans.csv"
+DISTRICT_ANOMALY_EXPLANATIONS_PATH = OUTPUT_DIR / "district_anomaly_explanations_isolation_forest.json"
 
 
 def geopackage_envelope_size(flags: int) -> int:
@@ -124,6 +131,47 @@ def build_grid_caches(frame: pd.DataFrame, geojson: dict) -> tuple[dict[str, pd.
     return frame_cache, geojson_cache
 
 
+def load_typology_artifacts() -> tuple[dict[str, dict], dict[str, dict]]:
+    profile_lookup: dict[str, dict] = {}
+    district_mix_lookup: dict[str, dict] = {}
+
+    if Path(CLUSTER_PROFILES_PATH).exists():
+        profile_rows = json.loads(Path(CLUSTER_PROFILES_PATH).read_text())
+        profile_lookup = {
+            str(row["cluster_label"]): row
+            for row in profile_rows
+        }
+
+    if Path(DISTRICT_CLUSTER_MIX_PATH).exists():
+        district_mix_frame = pd.read_csv(DISTRICT_CLUSTER_MIX_PATH)
+        for row in district_mix_frame.to_dict(orient="records"):
+            cluster_shares = row.get("cluster_shares", {})
+            if isinstance(cluster_shares, str):
+                cluster_shares = ast.literal_eval(cluster_shares)
+            district_mix_lookup[str(row["district_name"])] = {
+                "district_name": row["district_name"],
+                "district_key": row["district_key"],
+                "cluster_shares": {
+                    str(key): float(value)
+                    for key, value in dict(cluster_shares).items()
+                },
+                "dominant_cluster_label": row.get("dominant_cluster_label"),
+            }
+
+    return profile_lookup, district_mix_lookup
+
+
+def load_anomaly_artifacts() -> dict[str, dict]:
+    anomaly_lookup: dict[str, dict] = {}
+    if not Path(DISTRICT_ANOMALY_EXPLANATIONS_PATH).exists():
+        return anomaly_lookup
+
+    anomaly_rows = json.loads(Path(DISTRICT_ANOMALY_EXPLANATIONS_PATH).read_text())
+    for row in anomaly_rows:
+        anomaly_lookup[str(row["district_name"])] = row
+    return anomaly_lookup
+
+
 def build_dashboard_datasets() -> dict:
     district_geojson = load_district_geojson()
     grid_features, district_features = build_feature_tables()
@@ -142,6 +190,8 @@ def build_dashboard_datasets() -> dict:
         mobility_grid_frame,
         mobility_grid_geojson,
     )
+    cluster_profile_lookup, district_typology_lookup = load_typology_artifacts()
+    district_anomaly_lookup = load_anomaly_artifacts()
     return {
         "district_geojson": district_geojson,
         "grid_frame": grid_features,
@@ -153,4 +203,7 @@ def build_dashboard_datasets() -> dict:
         "land_use_district_geojson_cache": land_use_geojson_cache,
         "mobility_district_frame_cache": mobility_frame_cache,
         "mobility_district_geojson_cache": mobility_geojson_cache,
+        "cluster_profile_lookup": cluster_profile_lookup,
+        "district_typology_lookup": district_typology_lookup,
+        "district_anomaly_lookup": district_anomaly_lookup,
     }

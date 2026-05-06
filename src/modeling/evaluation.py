@@ -7,12 +7,10 @@ from src.feature_engineering import OUTPUT_DIR
 from src.modeling.anomaly import (
     AnomalyArtifacts,
     fit_isolation_forest_anomaly,
-    fit_local_outlier_factor_anomaly,
 )
 from src.modeling.clustering import (
     ClusteringArtifacts,
     fit_kmeans_typology,
-    fit_gaussian_mixture_typology,
 )
 
 
@@ -30,7 +28,6 @@ class ClusteringEvaluationResult:
 @dataclass
 class AnomalyEvaluationResult:
     summary_frame: pd.DataFrame
-    flagged_overlap_frame: pd.DataFrame
     warnings: list[str]
 
 
@@ -86,9 +83,6 @@ def evaluate_clustering_candidates(
         kmeans_artifacts = fit_kmeans_typology(grid_features, cluster_count=cluster_count)
         rows.append(summarize_clustering_artifacts(kmeans_artifacts))
 
-        gmm_artifacts = fit_gaussian_mixture_typology(grid_features, cluster_count=cluster_count)
-        rows.append(summarize_clustering_artifacts(gmm_artifacts))
-
     summary_frame = pd.DataFrame(rows).sort_values(
         by=["model_name", "cluster_count"],
         ascending=[True, True],
@@ -107,64 +101,25 @@ def rank_anomaly_records(artifacts: AnomalyArtifacts) -> pd.DataFrame:
     )
 
 
-def compare_anomaly_models(
+def evaluate_isolation_forest(
     district_features: pd.DataFrame,
     district_cluster_mix: pd.DataFrame,
 ) -> AnomalyEvaluationResult:
     iforest = fit_isolation_forest_anomaly(district_features, district_cluster_mix)
-    lof = fit_local_outlier_factor_anomaly(district_features, district_cluster_mix)
-
-    iforest_ranked = rank_anomaly_records(iforest).rename(
-        columns={
-            "anomaly_score": "iforest_score",
-            "anomaly_flag": "iforest_flag",
-            "anomaly_top_features": "iforest_top_features",
-        }
-    )
-    lof_ranked = rank_anomaly_records(lof).rename(
-        columns={
-            "anomaly_score": "lof_score",
-            "anomaly_flag": "lof_flag",
-            "anomaly_top_features": "lof_top_features",
-        }
-    )
-
-    summary_frame = iforest_ranked.merge(
-        lof_ranked,
-        on=["district_name", "district_key"],
-        how="outer",
-    )
-    summary_frame["flagged_by_both"] = (
-        summary_frame["iforest_flag"].astype("boolean").fillna(False)
-        & summary_frame["lof_flag"].astype("boolean").fillna(False)
-    )
-    summary_frame["flagged_by_either"] = (
-        summary_frame["iforest_flag"].astype("boolean").fillna(False)
-        | summary_frame["lof_flag"].astype("boolean").fillna(False)
-    )
-
-    flagged_overlap_frame = summary_frame.loc[
-        summary_frame["flagged_by_either"]
-    ].sort_values(
-        by=["flagged_by_both", "iforest_score", "lof_score"],
-        ascending=[False, False, False],
-    )
+    summary_frame = rank_anomaly_records(iforest)
 
     warnings: list[str] = []
-    both_count = int(summary_frame["flagged_by_both"].sum())
-    either_count = int(summary_frame["flagged_by_either"].sum())
-    if both_count == 0:
+    flagged_count = int(summary_frame["anomaly_flag"].eq(True).sum())
+    if flagged_count > 0:
         warnings.append(
-            "IsolationForest and LocalOutlierFactor do not agree on any flagged districts."
+            "IsolationForest anomaly flags are exploratory and sensitive to the small district count."
         )
-    elif both_count < max(1, either_count // 3):
-        warnings.append(
-            "The anomaly models show limited agreement, so district rankings should be treated as exploratory."
-        )
+    warnings.append(
+        "The top-ranked districts are more defensible as a relative mismatch signal than as a hard anomaly diagnosis."
+    )
 
     return AnomalyEvaluationResult(
         summary_frame=summary_frame,
-        flagged_overlap_frame=flagged_overlap_frame,
         warnings=warnings,
     )
 
@@ -187,11 +142,11 @@ def render_evaluation_markdown(
             lines.append(f"- {warning}")
         lines.append("")
 
-    lines.extend(
+        lines.extend(
         [
             "## Anomaly Detection",
             "",
-            anomaly_result.flagged_overlap_frame.to_markdown(index=False),
+            anomaly_result.summary_frame.to_markdown(index=False),
             "",
         ]
     )

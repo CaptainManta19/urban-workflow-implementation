@@ -1,10 +1,10 @@
 from dataclasses import dataclass
 from pathlib import Path
+import ast
 
 import numpy as np
 import pandas as pd
 from sklearn.impute import SimpleImputer
-from sklearn.neighbors import LocalOutlierFactor
 from sklearn.pipeline import Pipeline
 from sklearn.preprocessing import StandardScaler
 from sklearn.ensemble import IsolationForest
@@ -18,7 +18,8 @@ from src.ml_schemas import (
 
 
 DEFAULT_RANDOM_STATE = 42
-DEFAULT_CONTAMINATION = 0.15
+DEFAULT_CONTAMINATION = 0.10
+DEFAULT_N_ESTIMATORS = 300
 
 
 @dataclass
@@ -47,6 +48,8 @@ def expand_cluster_shares(district_cluster_mix: pd.DataFrame) -> pd.DataFrame:
             "dominant_cluster_label": row.get("dominant_cluster_label"),
         }
         cluster_shares = row.get("cluster_shares", {}) or {}
+        if isinstance(cluster_shares, str):
+            cluster_shares = ast.literal_eval(cluster_shares)
         for cluster_label, share in cluster_shares.items():
             flat_row[f"cluster_share_{cluster_label}"] = float(share)
         rows.append(flat_row)
@@ -181,6 +184,7 @@ def fit_isolation_forest_anomaly(
     config: AnomalyConfig | None = None,
     contamination: float = DEFAULT_CONTAMINATION,
     random_state: int = DEFAULT_RANDOM_STATE,
+    n_estimators: int = DEFAULT_N_ESTIMATORS,
 ) -> AnomalyArtifacts:
     prepared = prepare_anomaly_data(
         district_features=district_features,
@@ -190,6 +194,7 @@ def fit_isolation_forest_anomaly(
     model = IsolationForest(
         contamination=contamination,
         random_state=random_state,
+        n_estimators=n_estimators,
     )
     model.fit(prepared.feature_matrix)
 
@@ -217,50 +222,6 @@ def fit_isolation_forest_anomaly(
 
     return AnomalyArtifacts(
         model_name="isolation_forest",
-        scored_district_features=scored,
-        anomaly_records=anomaly_records,
-        feature_columns=prepared.feature_columns,
-    )
-
-
-def fit_local_outlier_factor_anomaly(
-    district_features: pd.DataFrame,
-    district_cluster_mix: pd.DataFrame,
-    config: AnomalyConfig | None = None,
-    contamination: float = DEFAULT_CONTAMINATION,
-) -> AnomalyArtifacts:
-    prepared = prepare_anomaly_data(
-        district_features=district_features,
-        district_cluster_mix=district_cluster_mix,
-        config=config,
-    )
-    model = LocalOutlierFactor(
-        contamination=contamination,
-        novelty=False,
-    )
-    predictions = model.fit_predict(prepared.feature_matrix)
-    anomaly_scores = -model.negative_outlier_factor_
-    anomaly_flags = predictions == -1
-
-    scored = prepared.merged_frame.copy()
-    scored["anomaly_score"] = np.nan
-    scored["anomaly_flag"] = None
-    scored["anomaly_top_features"] = [[] for _ in range(len(scored))]
-
-    scored.loc[prepared.eligible_index, "anomaly_score"] = anomaly_scores
-    scored.loc[prepared.eligible_index, "anomaly_flag"] = anomaly_flags
-
-    anomaly_records = build_anomaly_records(scored, prepared.scaled_feature_frame)
-    top_feature_lookup = {
-        record.district_key: record.top_contributing_features
-        for record in anomaly_records
-    }
-    for row_index, row in scored.iterrows():
-        district_key = row["district_key"]
-        scored.at[row_index, "anomaly_top_features"] = top_feature_lookup.get(district_key, [])
-
-    return AnomalyArtifacts(
-        model_name="local_outlier_factor",
         scored_district_features=scored,
         anomaly_records=anomaly_records,
         feature_columns=prepared.feature_columns,

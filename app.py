@@ -1,9 +1,15 @@
+import json
+import re
+from io import StringIO
+from pathlib import Path
 from urllib.parse import quote
 
 import pandas as pd
 import plotly.express as px
 import plotly.graph_objects as go
 from dash import ALL, Dash, Input, Output, State, callback_context, dcc, html, no_update
+from shapely.geometry import GeometryCollection, LineString, MultiLineString, shape as geometry_shape
+from shapely.validation import make_valid
 
 from src.dashboard_context import build_dashboard_datasets
 from src.feature_engineering import normalise_district_name
@@ -16,7 +22,9 @@ MOBILITY_SLIDER_MAX = 10
 MAP_UIREVISION = "district-map-shared-view"
 DEFAULT_VIEW_MODE = "display"
 DEFAULT_DISPLAY_SELECTION_MODE = "inspect"
-DEFAULT_PIPELINE_STAGE = "representation"
+DEFAULT_PIPELINE_STAGE = "source_intake"
+PROJECT_ROOT = Path(__file__).resolve().parent
+GRID_TOPICS = {"land_use", "height", "mobility"}
 
 
 def build_lucide_icon(svg_inner: str) -> html.Img:
@@ -43,6 +51,35 @@ def build_lucide_icon_data_uri(svg_inner: str, stroke: str = "#111827") -> str:
         f"{svg_inner}</svg>"
     )
     return f"data:image/svg+xml;utf8,{quote(svg)}"
+
+
+def build_file_icon_data_uri(stroke: str = "#111827") -> str:
+    return build_lucide_icon_data_uri(
+        (
+            '<path d="M14 2H7a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h10a2 2 0 0 0 2-2V7z"/>'
+            '<path d="M14 2v5h5"/>'
+            '<path d="M9 13h6"/>'
+            '<path d="M9 17h6"/>'
+        ),
+        stroke=stroke,
+    )
+
+
+NUMBER_EMPHASIS_PATTERN = re.compile(r"(?<![\d.,])(\d{1,3}(?:,\d{3})*(?:\.\d+)?%?|\d+(?:\.\d+)?%?)(?![\d.,])")
+
+
+def emphasize_numbers(text: str):
+    parts: list[str | html.Strong] = []
+    last_index = 0
+    for match in NUMBER_EMPHASIS_PATTERN.finditer(text):
+        start, end = match.span()
+        if start > last_index:
+            parts.append(text[last_index:start])
+        parts.append(html.Strong(match.group(0)))
+        last_index = end
+    if last_index < len(text):
+        parts.append(text[last_index:])
+    return parts if parts else text
 DASHBOARD_DATASETS = build_dashboard_datasets()
 DISTRICT_GEOJSON = DASHBOARD_DATASETS["district_geojson"]
 GRID_FRAME = DASHBOARD_DATASETS["grid_frame"]
@@ -50,6 +87,34 @@ DISTRICT_FRAME = DASHBOARD_DATASETS["district_frame"]
 DISTRICT_NAME_BY_KEY = {
     normalise_district_name(name): name
     for name in DISTRICT_FRAME["district_name"].drop_duplicates()
+}
+
+COMPARE_DISTRICT_COLORS = ("#2563eb", "#f4a261")
+
+
+def get_compare_color(panel_position: int) -> str:
+    return COMPARE_DISTRICT_COLORS[min(max(panel_position - 1, 0), len(COMPARE_DISTRICT_COLORS) - 1)]
+
+
+def build_compare_district_name(name: str) -> html.Span:
+    return html.Span(
+        name,
+        className="typology-district-name-inline",
+    )
+
+
+def sanitize_geometry(geometry):
+    if geometry.is_valid:
+        return geometry
+    repaired = make_valid(geometry)
+    if repaired.is_valid:
+        return repaired
+    return geometry.buffer(0)
+
+
+DISTRICT_SHAPES = {
+    feature["id"]: sanitize_geometry(geometry_shape(feature["geometry"]))
+    for feature in DISTRICT_GEOJSON["features"]
 }
 GRID_GEOJSON = DASHBOARD_DATASETS["grid_geojson"]
 MOBILITY_GRID_FRAME = DASHBOARD_DATASETS["mobility_grid_frame"]
@@ -75,6 +140,9 @@ LAND_USE_DISTRICT_FRAME_CACHE = DASHBOARD_DATASETS["land_use_district_frame_cach
 LAND_USE_DISTRICT_GEOJSON_CACHE = DASHBOARD_DATASETS["land_use_district_geojson_cache"]
 MOBILITY_DISTRICT_FRAME_CACHE = DASHBOARD_DATASETS["mobility_district_frame_cache"]
 MOBILITY_DISTRICT_GEOJSON_CACHE = DASHBOARD_DATASETS["mobility_district_geojson_cache"]
+CLUSTER_PROFILE_LOOKUP = DASHBOARD_DATASETS["cluster_profile_lookup"]
+DISTRICT_TYPOLOGY_LOOKUP = DASHBOARD_DATASETS["district_typology_lookup"]
+DISTRICT_ANOMALY_LOOKUP = DASHBOARD_DATASETS["district_anomaly_lookup"]
 
 
 def build_metric_options(topic: str) -> list[dict[str, str]]:
@@ -114,7 +182,7 @@ def build_metric_options(topic: str) -> list[dict[str, str]]:
     if topic == "vulnerability":
         return [
             {"label": "Territorial vulnerability index", "value": "vulnerability_index"},
-            {"label": "Employment vulnerability index", "value": "vulnerability_employment"},
+            {"label": "Economy and employment vulnerability index", "value": "vulnerability_employment"},
         ]
     return [
         {"label": "Population total", "value": "population_total"},
@@ -166,6 +234,8 @@ def get_land_use_class_values(district_name: str | list[str] | None) -> list[str
         district_frame = pd.DataFrame()
     else:
         district_frame = LAND_USE_DISTRICT_FRAME_CACHE.get(district_name, pd.DataFrame())
+    if "lu_2018_class_simplified" not in district_frame.columns:
+        return []
     return sorted(district_frame["lu_2018_class_simplified"].dropna().unique().tolist())
 
 
@@ -518,28 +588,40 @@ ICON_SEARCH = build_lucide_icon(
     '<circle cx="11" cy="11" r="7"/>'
     '<path d="m21 21-4.3-4.3"/>'
 )
-PIPELINE_STAGE_SOURCE_ICON = build_lucide_icon_data_uri(
+PIPELINE_STAGE_SOURCE_SVG = (
     '<ellipse cx="12" cy="5" rx="6" ry="3"/>'
     '<path d="M6 5v6c0 1.7 2.7 3 6 3s6-1.3 6-3V5"/>'
-    '<path d="M6 11v6c0 1.7 2.7 3 6 3s6-1.3 6-3v-6"/>',
-    stroke="#22c55e",
+    '<path d="M6 11v6c0 1.7 2.7 3 6 3s6-1.3 6-3v-6"/>'
 )
-PIPELINE_STAGE_CLEANING_ICON = build_lucide_icon_data_uri(
-    '<path d="M4 5h16"/><path d="M7 5v14"/><path d="M17 5v14"/><path d="M10 10h4"/><path d="M9 14h6"/>',
-    stroke="#22c55e",
+PIPELINE_STAGE_CLEANING_SVG = (
+    '<path d="M4 5h16"/><path d="M7 5v14"/><path d="M17 5v14"/><path d="M10 10h4"/><path d="M9 14h6"/>'
 )
-PIPELINE_STAGE_PREP_ICON = build_lucide_icon_data_uri(
-    '<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><rect x="4" y="17" width="16" height="4" rx="1"/>',
-    stroke="#111827",
+PIPELINE_STAGE_PREP_SVG = (
+    '<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><rect x="4" y="17" width="16" height="4" rx="1"/>'
 )
-PIPELINE_STAGE_VALIDATE_ICON = build_lucide_icon_data_uri(
-    '<circle cx="12" cy="12" r="8"/><path d="m9 12 2 2 4-4"/>',
-    stroke="#22c55e",
+PIPELINE_STAGE_VALIDATE_SVG = (
+    '<circle cx="12" cy="12" r="8"/><path d="m9 12 2 2 4-4"/>'
 )
-PIPELINE_STAGE_REPRESENT_ICON = build_lucide_icon_data_uri(
-    '<rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 20h8"/><path d="M12 17v3"/>',
-    stroke="#22c55e",
+PIPELINE_STAGE_REPRESENT_SVG = (
+    '<rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 20h8"/><path d="M12 17v3"/>'
 )
+
+
+def build_pipeline_stage_icon(svg_inner: str, is_active: bool) -> str:
+    return build_lucide_icon_data_uri(svg_inner, stroke="#111827" if is_active else "#7c3aed")
+PANEL_META_DATA_ICON = build_lucide_icon_data_uri(
+    '<path d="M14 3v4"/><path d="M18 3v4"/><path d="M6 7h12"/><rect x="4" y="5" width="16" height="15" rx="2"/><path d="M8 11h8"/><path d="M8 15h5"/>',
+    stroke="#486175",
+)
+PANEL_META_ALERT_ICON = build_lucide_icon_data_uri(
+    '<path d="m10.29 3.86-8 14A1 1 0 0 0 3.16 19h17.68a1 1 0 0 0 .87-1.5l-8-14a1 1 0 0 0-1.74 0z"/><path d="M12 9v4"/><path d="M12 17h.01"/>',
+    stroke="#dc2626",
+)
+PANEL_ML_ICON = build_lucide_icon_data_uri(
+    '<path d="M9 18h6"/><path d="M10 22h4"/><path d="M12 2a7 7 0 0 0-4 12.75c.63.44 1 1.15 1 1.92V17h6v-.33c0-.77.37-1.48 1-1.92A7 7 0 0 0 12 2z"/>',
+    stroke="#7c3aed",
+)
+PIPELINE_FILE_ICON = build_file_icon_data_uri(stroke="#486175")
 
 
 def build_district_options(
@@ -622,7 +704,7 @@ def get_legend_title(label: str) -> str:
         "Bus stops per 250m cell": "Bus stops per<br>250m cell",
         "Registered unemployment": "Registered<br>unemployment",
         "Territorial vulnerability index": "Territorial vulnerability<br>index",
-        "Employment vulnerability index": "Employment vulnerability<br>index",
+        "Economy and employment vulnerability index": "Economy and employment<br>vulnerability index",
         "Mean building height": "Mean building<br>height",
         "Maximum building height": "Maximum building<br>height",
         "Building height (m)": "Building height<br>(m)",
@@ -704,7 +786,7 @@ def build_choropleth(metric: str, topic: str):
         "unemployment_total": "Registered unemployment",
         "unemployment_rate": "Unemployment rate",
         "vulnerability_index": "Territorial vulnerability index",
-        "vulnerability_employment": "Employment vulnerability index",
+        "vulnerability_employment": "Economy and employment vulnerability index",
     }
     legend_title = label_lookup[metric]
 
@@ -785,7 +867,9 @@ def build_choropleth(metric: str, topic: str):
         domain={"x": [0.1, 0.98], "y": [0.02, 0.98]},
     )
     unavailable = figure_frame[~figure_frame[availability_column]].dropna(subset=["centroid_lon", "centroid_lat"])
-    if not unavailable.empty:
+    if topic == "housing" and not unavailable.empty:
+        add_unavailable_hatch_overlay(figure, unavailable["district_name"].tolist())
+    elif not unavailable.empty:
         figure.add_scattergeo(
             lon=unavailable["centroid_lon"],
             lat=unavailable["centroid_lat"],
@@ -798,19 +882,81 @@ def build_choropleth(metric: str, topic: str):
     return figure
 
 
+def iter_clipped_line_segments(geometry):
+    if geometry.is_empty:
+        return
+    if isinstance(geometry, LineString):
+        yield geometry
+        return
+    if isinstance(geometry, MultiLineString):
+        for line in geometry.geoms:
+            if not line.is_empty:
+                yield line
+        return
+    if isinstance(geometry, GeometryCollection):
+        for item in geometry.geoms:
+            yield from iter_clipped_line_segments(item)
+
+
+def build_hatch_segments_for_geometry(geometry, spacing: float = 0.0032):
+    minx, miny, maxx, maxy = geometry.bounds
+    pad = max(maxx - minx, maxy - miny) * 0.35
+    start = (miny - maxx) - pad
+    end = (maxy - minx) + pad
+    hatch_lines = []
+    offset = start
+    while offset <= end:
+        x0 = minx - pad
+        x1 = maxx + pad
+        candidate = LineString(
+            [
+                (x0, x0 + offset),
+                (x1, x1 + offset),
+            ]
+        )
+        clipped = candidate.intersection(geometry)
+        hatch_lines.extend(iter_clipped_line_segments(clipped))
+        offset += spacing
+    return hatch_lines
+
+
+def add_unavailable_hatch_overlay(figure, district_names: list[str]):
+    for district_name in district_names:
+        geometry = DISTRICT_SHAPES.get(district_name)
+        if geometry is None:
+            continue
+        for segment in build_hatch_segments_for_geometry(geometry):
+            coords = list(segment.coords)
+            if len(coords) < 2:
+                continue
+            figure.add_trace(
+                go.Scattergeo(
+                    lon=[point[0] for point in coords],
+                    lat=[point[1] for point in coords],
+                    mode="lines",
+                    line={"color": "rgba(71,85,105,0.68)", "width": 1.15},
+                    hoverinfo="skip",
+                    showlegend=False,
+                )
+            )
+
+
 def add_selected_district_outlines(figure, district_names: list[str] | None):
     selected_districts = canonicalise_selected_districts(district_names)
     outline_styles = [
-        {"color": "#111827", "width": 2.8},
-        {"color": "#dc2626", "width": 2.2},
+        {"color": COMPARE_DISTRICT_COLORS[0], "width": 2.8},
+        {"color": COMPARE_DISTRICT_COLORS[1], "width": 2.4},
+    ]
+    styled_districts = [
+        (district_name, outline_styles[min(index, len(outline_styles) - 1)])
+        for index, district_name in enumerate(selected_districts)
     ]
 
-    for index, district_name in enumerate(reversed(selected_districts)):
+    for district_name, style in reversed(styled_districts):
         selected_features = [
             feature for feature in DISTRICT_GEOJSON["features"]
             if feature["id"] == district_name
         ]
-        style = outline_styles[min(index, len(outline_styles) - 1)]
         for feature in selected_features:
             for ring in feature["geometry"]["coordinates"]:
                 lon = [point[0] for point in ring]
@@ -1077,13 +1223,22 @@ def build_info_panel(
     topic: str,
     mobility_threshold: int = DEFAULT_MOBILITY_THRESHOLD,
     land_use_filter: list[str] | None = None,
+    show_typology_section: bool = True,
+    show_anomaly_section: bool = True,
+    panel_position: int = 1,
 ) -> html.Div:
     canonical_district_name = DISTRICT_NAME_BY_KEY.get(normalise_district_name(district_name), district_name)
     district_row = DISTRICT_FRAME.loc[DISTRICT_FRAME["district_name"] == canonical_district_name].iloc[0]
     district_name = canonical_district_name
+    typology_section = None
+    anomaly_section = None
+    metric_label_node = None
     sources_text = "Madrid district boundaries"
     reference_date = "Not available yet"
+    source_links: list[tuple[str, str | None]] = []
     if topic == "land_use":
+        if show_typology_section:
+            typology_section = build_typology_section(district_name, topic)
         district_cells = LAND_USE_DISTRICT_FRAME_CACHE.get(district_name, GRID_FRAME.head(0).copy()).copy()
         visible_cells = district_cells
         selected_classes = normalise_land_use_filter_values(land_use_filter, district_name)
@@ -1126,13 +1281,19 @@ def build_info_panel(
             "It gives spatial context rather than a single district score."
         )
         production_text = (
-            "Land-use classes were attached to the 250m research grid and rendered directly as a categorical spatial layer. "
-            "The right panel summarizes the selected district by its dominant class and broad green/open-land share."
+            "Use this as a broad spatial summary. It shows the main land-use character across the district's grid cells, "
+            "not parcel-level land use on every site."
         )
-        caveat_line = "This is a simplified research-derived land-use layer and should be read as spatial context, not parcel-level zoning."
-        sources_text = "Research-derived combined grid layer (Urban Atlas based) + Madrid district boundaries"
-        reference_date = "Urban Atlas 2018 within research-derived combined grid layer"
+        caveat_line = "This is a simplified land-use layer for spatial context, not parcel-level zoning."
+        sources_text = "Urban Atlas-based 250m grid + Madrid district boundaries"
+        reference_date = "Land-use layer: 2018"
+        source_links = [
+            ("Urban Atlas", "https://land.copernicus.eu/en/products/urban-atlas"),
+            ("District boundaries", None),
+        ]
     elif topic == "height":
+        if show_typology_section:
+            typology_section = build_typology_section(district_name, topic)
         district_cells = LAND_USE_DISTRICT_FRAME_CACHE.get(district_name, GRID_FRAME.head(0).copy()).copy()
         height_cells = district_cells[district_cells["height_mean"].notna()].copy()
         mean_height = height_cells["height_mean"].mean() if not height_cells.empty else None
@@ -1153,17 +1314,19 @@ def build_info_panel(
             )
         )
         meaning_text = (
-            "This view shows building-height variation across 250m cells inside the selected district. "
-            "It works as spatial evidence for urban form rather than an administrative district indicator."
+            "This helps show the district's built form. It is most useful for spotting broad differences in height across the district."
         )
-        production_text = (
-            "Building-height values were attached to the research grid and rendered directly as a continuous spatial layer. "
-            "The right panel summarizes the selected district using the cells that have height information."
-        )
-        caveat_line = "Height values are grid-derived research outputs and should be read as generalized building-height context, not exact individual-building measurements."
-        sources_text = "Research-derived combined grid layer (height raster based) + Madrid district boundaries"
-        reference_date = "Research-derived combined grid layer"
+        production_text = "Use this as a broad height pattern, not as an exact reading for each building."
+        caveat_line = "Height values are generalized grid estimates, not exact building measurements."
+        sources_text = "Urban Atlas building-height layer + Madrid district boundaries"
+        reference_date = "Reference year not explicitly documented in current source notes"
+        source_links = [
+            ("Urban Atlas building height", "https://land.copernicus.eu/en/products/urban-atlas?tab=building_height"),
+            ("District boundaries", "https://datos.madrid.es/dataset/900012-0-limites-administrativos-mapas"),
+        ]
     elif topic == "mobility":
+        if show_typology_section:
+            typology_section = build_typology_section(district_name, topic)
         district_cells = MOBILITY_GRID_FRAME.loc[MOBILITY_GRID_FRAME["district_name"] == district_name].copy()
         cells_above_threshold = district_cells.loc[district_cells["pt_stop_count"] >= mobility_threshold]
         has_data = not district_cells.empty
@@ -1173,25 +1336,27 @@ def build_info_panel(
             metric_value = f"{len(cells_above_threshold):,} cells at threshold"
             key_finding = (
                 f"{district_name} has {len(cells_above_threshold):,} grid cells with at least "
-                f"{mobility_threshold} bus stops in the research-derived mobility layer."
+                f"{mobility_threshold} bus stops in the current mobility layer."
             )
             meaning_text = (
-                "This view uses 250m grid cells to show where public transport stops concentrate within and across districts. "
-                "It works as spatial evidence rather than a district-native administrative indicator."
+                "This helps show where stop access is more concentrated within the district. It is useful for comparing broad spatial patterns, not service quality in full."
             )
             production_text = (
-                "Bus-stop counts were attached to 250m grid cells in the research notebook workflow and are rendered directly as a spatial evidence layer. "
-                "The right panel remains district-first by summarizing the selected district's cells."
+                "Use this as a stop concentration view. It shows where stops cluster across grid cells, not how frequent or reliable service is."
             )
-            caveat_line = "This is a research-derived grid layer; it shows stop concentration by cell, not full transit service quality."
-            reference_date = "Research-derived grid layer based on notebook inputs"
+            caveat_line = "This shows stop concentration by grid cell, not full public transport quality."
+            reference_date = "2018"
         else:
             metric_value = "No data available yet"
             key_finding = f"{district_name} does not have mobility grid data available yet for this MVP slice."
-            meaning_text = "This district remains visible, but the current research-derived mobility layer did not yield matching grid cells yet."
-            production_text = "The district geometry comes from the Madrid boundary file. The mobility grid layer did not yield matching cells for this district."
-            caveat_line = "Research-derived spatial layers may have partial coverage depending on the notebook output."
-        sources_text = "Research-derived combined grid layer + Madrid district boundaries"
+            meaning_text = "The district is still shown, but this topic does not yet have matching mobility cells here."
+            production_text = "Treat this as a data coverage gap rather than as evidence of low mobility access."
+            caveat_line = "Research-derived grid topics may still have partial coverage."
+        sources_text = "Public transportation usage dataset (2018), Kaggle + Madrid district boundaries"
+        source_links = [
+            ("Public transportation usage dataset (2018), Kaggle", "https://www.kaggle.com/datasets/dataguapa/madrid-public-transportation-data-2018"),
+            ("District boundaries", "https://datos.madrid.es/dataset/900012-0-limites-administrativos-mapas"),
+        ]
     elif topic == "housing":
         has_data = bool(district_row["has_housing_data"])
         topic_label = "Housing"
@@ -1206,31 +1371,35 @@ def build_info_panel(
             )
         )
         key_finding = (
-            f"{district_name} does not have housing data available yet for this MVP slice."
+            f"Housing data is not available yet for {district_name} in this dashboard view."
             if not has_data
             else (
-                f"{district_name} has {int(district_row['housing_total']):,} EMVS housing allocations in the current source, "
-                f"equivalent to {format_housing_rate(district_row['housing_per_1000_residents'])}."
+                f"{district_name} has {int(district_row['housing_total']):,} EMVS public housing allocations, "
+                f"equal to {format_housing_rate(district_row['housing_per_1000_residents'])}."
             )
         )
         meaning_text = (
-            "This district remains visible on the map so missing topic coverage is explicit instead of hidden."
+            "The district is still shown so the data gap stays visible."
             if not has_data
             else (
-                "This view shows district-level public housing allocation in the EMVS source. It is not a full housing market indicator, "
-                "but it gives a transparent public-housing-oriented comparison across districts."
+                "This gives a focused view of public housing provision in the district. It does not describe the full housing market."
             )
         )
         production_text = (
-            "The district geometry comes from the Madrid boundary file. The current housing dataset did not yield a matching value yet, so the district is shown as unavailable."
+            "This topic does not yet have a matching district value in the current dashboard data."
             if not has_data
             else (
-                "Housing values come from the local EMVS housing CSV. The per-1,000-residents rate is derived by combining the EMVS total with district population totals."
+                "Read these values as public housing context at district level. They are most useful for comparing provision across districts."
             )
         )
-        reference_date = "EMVS adjudications from 1/06/2015 to 30/04/2023" if has_data else "Not available yet"
+        reference_date = "1 June 2015 to 30 April 2023" if has_data else "Not available yet"
         caveat_line = "EMVS values describe public housing allocation, not total housing supply or affordability."
         sources_text = "EMVS housing CSV + Madrid Population API + Madrid district boundaries"
+        source_links = [
+            ("EMVS housing CSV", None),
+            ("Madrid Population API", "https://datos.madrid.es/dataset/300557-0-poblacion-distrito-barrio"),
+            ("District boundaries", "https://datos.madrid.es/dataset/900012-0-limites-administrativos-mapas"),
+        ]
     elif topic == "green":
         has_data = bool(district_row["has_green_data"])
         topic_label = "Green"
@@ -1245,26 +1414,30 @@ def build_info_panel(
             )
         )
         key_finding = (
-            f"{district_name} does not have green-space data available yet for this MVP slice."
+            f"Green-space data is not available yet for {district_name} in this dashboard view."
             if not has_data
             else (
                 f"{district_name} has {format_float(district_row['green_area_ha'], ' ha')} of district green space, "
-                f"equivalent to {format_float(district_row['green_area_per_10000'], ' ha / 10,000 residents')}."
+                f"equal to {format_float(district_row['green_area_per_10000'], ' ha / 10,000 residents')}."
             )
         )
         meaning_text = (
-            "This district remains visible on the map so missing topic coverage is explicit instead of hidden."
+            "The district is still shown so the data gap stays visible."
             if not has_data
-            else "This view shows district-level green-space provision from the municipal indicator panel."
+            else "This shows how much green space is recorded for the district. It helps compare overall provision across districts."
         )
         production_text = (
-            "The district geometry comes from the Madrid boundary file. The current green-space dataset did not yield a matching value yet, so the district is shown as unavailable."
+            "This topic does not yet have a matching district value in the current dashboard data."
             if not has_data
-            else "Green-space values come from the Madrid district indicator panel and are displayed at district level."
+            else "Read this as district-wide green provision, not as direct access from a specific street or address."
         )
         reference_date = f"Indicator year {int(district_row['green_area_per_10000_year'])}" if has_data and not pd.isna(district_row.get("green_area_per_10000_year")) else "Not available yet"
         caveat_line = "This is district-level green-space provision, not direct park accessibility from a specific address."
         sources_text = "Madrid district indicator panel + Madrid district boundaries"
+        source_links = [
+            ("Madrid district indicator panel", "https://datos.madrid.es/dataset/300087-0-indicadores-distritos"),
+            ("District boundaries", "https://datos.madrid.es/dataset/900012-0-limites-administrativos-mapas"),
+        ]
     elif topic == "economy":
         has_data = bool(district_row["has_economy_data"])
         topic_label = "Economy"
@@ -1279,26 +1452,30 @@ def build_info_panel(
             )
         )
         key_finding = (
-            f"{district_name} does not have economy data available yet for this MVP slice."
+            f"Income data is not available yet for {district_name} in this dashboard view."
             if not has_data
             else (
                 f"{district_name} records {format_float(district_row['income_per_person'], ' €', 0)} income per person "
-                f"and {format_float(district_row['household_income'], ' €', 0)} household income in the current panel."
+                f"and {format_float(district_row['household_income'], ' €', 0)} household income."
             )
         )
         meaning_text = (
-            "This district remains visible on the map so missing topic coverage is explicit instead of hidden."
+            "The district is still shown so the data gap stays visible."
             if not has_data
-            else "This view adds district-level income context from the municipal indicator panel."
+            else "This gives a broad picture of local economic conditions in the district. It does not show the full spread of incomes within the district."
         )
         production_text = (
-            "The district geometry comes from the Madrid boundary file. The current economy dataset did not yield a matching value yet, so the district is shown as unavailable."
+            "This topic does not yet have a matching district value in the current dashboard data."
             if not has_data
-            else "Income values come from the Madrid district indicator panel and are displayed at district level."
+            else "Use this as district context for comparison, not as a description of every household."
         )
         reference_date = f"Indicator year {int(district_row['income_per_person_year'])}" if has_data and not pd.isna(district_row.get("income_per_person_year")) else "Not available yet"
         caveat_line = "These are panel indicators and should be read as district context, not household-level distributions."
         sources_text = "Madrid district indicator panel + Madrid district boundaries"
+        source_links = [
+            ("Madrid district indicator panel", "https://datos.madrid.es/dataset/300087-0-indicadores-distritos"),
+            ("District boundaries", "https://datos.madrid.es/dataset/900012-0-limites-administrativos-mapas"),
+        ]
     elif topic == "employment":
         has_data = bool(district_row["has_employment_data"])
         topic_label = "Employment"
@@ -1313,7 +1490,7 @@ def build_info_panel(
             )
         )
         key_finding = (
-            f"{district_name} does not have employment data available yet for this MVP slice."
+            f"Employment data is not available yet for {district_name} in this dashboard view."
             if not has_data
             else (
                 f"{district_name} records {format_float(district_row['unemployment_total'], '', 0)} registered unemployed people "
@@ -1321,22 +1498,30 @@ def build_info_panel(
             )
         )
         meaning_text = (
-            "This district remains visible on the map so missing topic coverage is explicit instead of hidden."
+            "The district is still shown so the data gap stays visible."
             if not has_data
-            else "This view adds district-level unemployment context from the municipal indicator panel."
+            else "This gives a broad picture of labor-market pressure in the district and helps compare districts at a high level."
         )
         production_text = (
-            "The district geometry comes from the Madrid boundary file. The current employment dataset did not yield a matching value yet, so the district is shown as unavailable."
+            "This topic does not yet have a matching district value in the current dashboard data."
             if not has_data
-            else "Employment values come from the Madrid district indicator panel and are displayed at district level."
+            else "Use this as district context rather than as a full picture of employment conditions."
         )
         reference_date = f"Indicator year {int(district_row['unemployment_rate_year'])}" if has_data and not pd.isna(district_row.get("unemployment_rate_year")) else "Not available yet"
         caveat_line = "These values reflect registered unemployment indicators, not the full labor market picture."
         sources_text = "Madrid district indicator panel + Madrid district boundaries"
+        source_links = [
+            ("Madrid district indicator panel", "https://datos.madrid.es/dataset/300087-0-indicadores-distritos"),
+            ("District boundaries", "https://datos.madrid.es/dataset/900012-0-limites-administrativos-mapas"),
+        ]
     elif topic == "vulnerability":
         has_data = bool(district_row["has_vulnerability_data"])
         topic_label = "Vulnerability"
-        metric_label = "Territorial vulnerability index" if metric == "vulnerability_index" else "Employment vulnerability index"
+        metric_label = (
+            "Territorial vulnerability index"
+            if metric == "vulnerability_index"
+            else "Economy and employment vulnerability index"
+        )
         metric_value = (
             "No data available yet"
             if not has_data
@@ -1347,26 +1532,36 @@ def build_info_panel(
             )
         )
         key_finding = (
-            f"{district_name} does not have vulnerability data available yet for this MVP slice."
+            f"Vulnerability data is not available yet for {district_name} in this dashboard view."
             if not has_data
             else (
                 f"{district_name} shows a territorial vulnerability index of {format_float(district_row['vulnerability_index'])} "
-                f"and an employment vulnerability index of {format_float(district_row['vulnerability_employment'])}."
+                f"and an economy and employment vulnerability index of {format_float(district_row['vulnerability_employment'])}."
             )
         )
         meaning_text = (
-            "This district remains visible on the map so missing topic coverage is explicit instead of hidden."
+            "The district is still shown so the data gap stays visible."
             if not has_data
-            else "This view adds district-level vulnerability context from the municipal indicator panel."
+            else "These indices help compare broader social and economic pressure across districts."
         )
         production_text = (
-            "The district geometry comes from the Madrid boundary file. The current vulnerability dataset did not yield a matching value yet, so the district is shown as unavailable."
+            "This topic does not yet have a matching district value in the current dashboard data."
             if not has_data
-            else "Vulnerability values come from the Madrid district indicator panel and are displayed at district level."
+            else "Read these as broad comparative indices, not as direct explanations of cause."
         )
         reference_date = f"Indicator year {int(district_row['vulnerability_index_year'])}" if has_data and not pd.isna(district_row.get("vulnerability_index_year")) else "Not available yet"
         caveat_line = "These are composite municipal panel indices and should be read as comparative context rather than direct causal explanations."
         sources_text = "Madrid district indicator panel + Madrid district boundaries"
+        source_links = [
+            ("Madrid district indicator panel", "https://datos.madrid.es/dataset/300087-0-indicadores-distritos"),
+            ("District boundaries", "https://datos.madrid.es/dataset/900012-0-limites-administrativos-mapas"),
+        ]
+        vulnerability_metric_help = (
+            "This is a composite district index from Madrid's IGUALA system. It combines several dimensions of vulnerability, including social conditions, urban environment and mobility, education and culture, economy and employment, and health. Higher values indicate higher relative vulnerability and are best used for high-level district comparison."
+            if metric == "vulnerability_index"
+            else "This is the economy and employment part of Madrid's IGUALA vulnerability system. It reflects district-level pressure linked to employment and economic conditions. Higher values indicate higher relative vulnerability in this dimension, and the index should be read as comparative context rather than as a direct measure of unemployment alone."
+        )
+        metric_label_node = build_metric_label_with_info(metric_label, vulnerability_metric_help)
     else:
         has_data = bool(district_row["has_population_data"])
         topic_label = "Population & density"
@@ -1383,7 +1578,7 @@ def build_info_panel(
         density_text = format_density(district_row["population_density_km2"]) if has_data else "Not available yet"
         reference_date = district_row["reference_date"] if has_data else "Not available yet"
         key_finding = (
-            f"{district_name} does not have data available yet for this first MVP slice."
+            f"Population data is not available yet for {district_name} in this dashboard view."
             if not has_data
             else (
                 f"{district_name} has {district_row['population_total']:,} residents and a population density "
@@ -1391,64 +1586,156 @@ def build_info_panel(
             )
         )
         meaning_text = (
-            "This district remains visible on the map so missing topic coverage is explicit instead of hidden."
+            "The district is still shown so the data gap stays visible."
             if not has_data
             else (
-                "This first MVP view shows district-scale demographic intensity. It is a district-native "
-                "indicator, so the values are directly comparable across Madrid districts."
+                "This gives a simple district-level view of how many people live here and how concentrated they are."
             )
         )
         production_text = (
-            "The district geometry comes from the Madrid boundary file. The current topic dataset did not yield a matching value yet, so the district is shown as unavailable."
+            "This topic does not yet have a matching district value in the current dashboard data."
             if not has_data
             else (
-                "Population totals come from the Madrid population API. Density is derived by combining "
-                "district population totals with district boundary areas from the Madrid boundary file."
+                "These values work well for district-to-district comparison, but density reflects the whole district area rather than only built-up land."
             )
         )
         caveat_line = "Density is derived from administrative district area, not built-up area."
         sources_text = "Madrid Population API + Madrid district boundaries"
+        source_links = [
+            ("Madrid Population API", "https://datos.madrid.es/dataset/300557-0-poblacion-distrito-barrio"),
+            ("District boundaries", "https://datos.madrid.es/dataset/900012-0-limites-administrativos-mapas"),
+        ]
 
-    return html.Div(
-        [
-            html.H2(district_name, className="panel-title"),
-            html.P(topic_label, className="panel-subtitle"),
-            html.Div(
-                [
-                    html.H3(metric_value, className="metric-value"),
-                    html.P(metric_label, className="metric-label"),
-                ],
-                className="metric-card",
-            ),
-            html.Div(
-                [
-                    html.H4("Key finding"),
-                    html.P(key_finding),
-                    html.H4("What this means"),
-                    html.P(meaning_text),
-                    html.H4("How this was produced"),
-                    html.P(production_text),
-                    html.H4("Assumptions / caveats"),
-                    html.Ul(
-                        [
-                            html.Li("The current view uses district totals only, not barrio detail."),
-                            html.Li(caveat_line),
-                            html.Li("Districts without matching topic data are shown in grey with an icon overlay."),
-                        ]
-                    ),
-                    html.H4("Sources"),
-                    html.P(sources_text),
-                    html.H4("Reference date"),
-                    html.P(str(reference_date)),
-                ],
-                className="panel-body",
-            ),
-        ],
-        className="right-panel-content",
+    content_children = [
+        html.Div(
+            [
+                html.Span(
+                    className="panel-title-dot",
+                    style={"backgroundColor": get_compare_color(panel_position)},
+                    **{"aria-hidden": "true"},
+                ),
+                html.H2(district_name, className="panel-title"),
+            ],
+            className="panel-title-row",
+        ),
+        html.P(topic_label, className="panel-subtitle"),
+        html.Div(
+            [
+                html.H3(metric_value, className="metric-value"),
+                metric_label_node or html.P(metric_label, className="metric-label"),
+            ],
+            className="metric-card",
+        ),
+    ]
+    is_grid_topic = topic in {"land_use", "height", "mobility"}
+    if is_grid_topic:
+        panel_body_children = [
+            html.H4("What we see"),
+            html.P(emphasize_numbers(key_finding)),
+            html.H4("Why it matters"),
+            html.P(emphasize_numbers(meaning_text)),
+            html.H4("How to read it"),
+            html.P(emphasize_numbers(production_text)),
+        ]
+    else:
+        panel_body_children = [
+            html.H4("What we see"),
+            html.P(emphasize_numbers(key_finding)),
+            html.H4("Why it matters"),
+            html.P(emphasize_numbers(meaning_text)),
+            html.H4("How to read it"),
+            html.P(emphasize_numbers(production_text)),
+        ]
+    content_children.append(
+        html.Div(
+            panel_body_children,
+            className="panel-body",
+        )
     )
+    if typology_section is not None:
+        content_children.append(typology_section)
+    if show_anomaly_section and not is_grid_topic:
+        anomaly_section = build_district_mismatch_section(district_name)
+        if anomaly_section is not None:
+            content_children.append(anomaly_section)
+    if is_grid_topic:
+        content_children.append(
+            html.Div(
+                [
+                    build_panel_meta_item(
+                        PANEL_META_DATA_ICON,
+                        "Source",
+                        html.Div(
+                            [
+                                html.P(sources_text, className="panel-meta-text"),
+                                build_panel_meta_links(source_links),
+                                html.P(f"Reference date: {reference_date}", className="panel-meta-subtext"),
+                            ]
+                        ),
+                        tone="plain",
+                    ),
+                    build_panel_meta_item(
+                        PANEL_META_ALERT_ICON,
+                        "Keep in mind",
+                        html.Ul(
+                            [
+                                html.Li(caveat_line),
+                                html.Li("Districts without matching topic data appear in grey."),
+                            ],
+                            className="panel-meta-list",
+                        ),
+                        tone="warning",
+                    ),
+                ],
+                className="panel-meta-grid",
+            )
+        )
+    else:
+        source_data_children = []
+        if not has_data:
+            source_data_children.append(
+                html.P(
+                    "No matching topic value is currently available for this district in the dashboard data.",
+                    className="panel-meta-text",
+                )
+            )
+        if has_data or not source_links:
+            source_data_children.append(html.P(sources_text, className="panel-meta-text"))
+        source_data_children.extend(
+            [
+                build_panel_meta_links(source_links),
+                html.P(f"Reference date: {reference_date}", className="panel-meta-subtext"),
+            ]
+        )
+        content_children.append(
+            html.Div(
+                [
+                    build_panel_meta_item(
+                        PANEL_META_DATA_ICON,
+                        "Source",
+                        html.Div(source_data_children),
+                        tone="plain",
+                    ),
+                    build_panel_meta_item(
+                        PANEL_META_ALERT_ICON,
+                        "Keep in mind",
+                        html.Ul(
+                            [
+                                html.Li(caveat_line),
+                                html.Li("Districts without matching topic data appear in grey."),
+                            ],
+                            className="panel-meta-list",
+                        ),
+                        tone="warning",
+                    ),
+                ],
+                className="panel-meta-grid",
+            )
+        )
+    return html.Div(content_children, className="right-panel-content")
 
 
-def build_topic_prompt_panel(district_name: str, is_comparison: bool = False):
+def build_topic_prompt_panel(district_name: str, is_comparison: bool = False, panel_position: int = 1):
     guidance_text = (
         "Choose a shared topic to open both district sidebars and compare them with the same lens."
         if is_comparison
@@ -1456,7 +1743,17 @@ def build_topic_prompt_panel(district_name: str, is_comparison: bool = False):
     )
     return html.Div(
         [
-            html.H2(district_name, className="panel-title"),
+            html.Div(
+                [
+                    html.Span(
+                        className="panel-title-dot",
+                        style={"backgroundColor": get_compare_color(panel_position)},
+                        **{"aria-hidden": "true"},
+                    ),
+                    html.H2(district_name, className="panel-title"),
+                ],
+                className="panel-title-row",
+            ),
             html.P("District selected", className="panel-subtitle"),
             html.Div(
                 [
@@ -1528,41 +1825,701 @@ def build_toolbar_info_bubble(message: str, title: str = "Note"):
     )
 
 
+def build_panel_info_bubble(message: str, title: str) -> html.Div:
+    return html.Div(
+        [
+            html.Button(
+                "i",
+                className="inline-info-chip panel-inline-info-chip",
+                tabIndex=-1,
+            ),
+            html.Div(
+                [
+                    html.Div(title, className="inline-info-bubble-title"),
+                    html.Div(message),
+                ],
+                className="inline-info-bubble panel-inline-info-bubble",
+            ),
+        ],
+        className="inline-info-wrap panel-inline-info-wrap",
+    )
+
+
+def build_metric_info_bubble(message: str, title: str = "About this metric") -> html.Div:
+    return html.Div(
+        [
+            html.Button(
+                "i",
+                className="inline-info-chip metric-info-chip",
+                tabIndex=-1,
+            ),
+            html.Div(
+                [
+                    html.Div(title, className="inline-info-bubble-title"),
+                    html.Div(message),
+                ],
+                className="inline-info-bubble metric-info-bubble",
+            ),
+        ],
+        className="inline-info-wrap metric-info-wrap",
+    )
+
+
+def build_metric_label_with_info(label: str, message: str, title: str = "About this metric") -> html.Div:
+    return html.Div(
+        [
+            html.P(label, className="metric-label metric-label-inline"),
+            build_metric_info_bubble(message, title),
+        ],
+        className="metric-label-row",
+    )
+
+
+def build_panel_heading_with_info(title: str, message: str, bubble_title: str) -> html.Div:
+    return html.Div(
+        [
+            html.H4(title, className="panel-inline-heading-title"),
+            build_panel_info_bubble(message, bubble_title),
+        ],
+        className="panel-inline-heading",
+    )
+
+
+def build_term_hint(term: str, message: str) -> html.Span:
+    return html.Span(
+        [
+            html.Span(term, className="panel-term-text"),
+            html.Span(message, className="panel-term-bubble"),
+        ],
+        className="panel-term-hint",
+        tabIndex=0,
+    )
+
+
+def build_source_link(label: str, href: str | None) -> html.Span | html.A:
+    if not href:
+        return html.Span(label, className="panel-meta-plain-text")
+    return html.A(label, href=href, target="_blank", rel="noreferrer", className="panel-meta-link")
+
+
+def build_panel_meta_item(
+    icon_src: str,
+    title: str,
+    content: html.Div | html.P | html.Ul,
+    tone: str = "neutral",
+) -> html.Div:
+    return html.Div(
+        [
+            html.Img(src=icon_src, alt="", className="panel-meta-icon", draggable="false"),
+            html.Div(
+                [
+                    html.Div(title, className="panel-meta-title"),
+                    content,
+                ],
+                className="panel-meta-content",
+            ),
+        ],
+        className=f"panel-meta-item panel-meta-item-{tone}",
+    )
+
+
+def build_panel_meta_links(items: list[tuple[str, str | None]]) -> html.Div:
+    children = []
+    for index, (label, href) in enumerate(items):
+        if index:
+            children.append(html.Span(" / ", className="panel-meta-separator"))
+        children.append(build_source_link(label, href))
+    return html.Div(children, className="panel-meta-links")
+
+
+def format_typology_share(share: float | None) -> str:
+    if share is None:
+        return "Not available"
+    return f"{share * 100:.0f}% of district grid cells"
+
+
+def describe_height_band(value: float | None) -> str:
+    if value is None or pd.isna(value):
+        return "height pattern not available"
+    if value < 10:
+        return "lower-rise fabric"
+    if value < 20:
+        return "mid-rise fabric"
+    return "taller urban fabric"
+
+
+def describe_pt_band(value: float | None) -> str:
+    if value is None or pd.isna(value):
+        return "transport access pattern not available"
+    if value < 1.5:
+        return "lower stop intensity"
+    if value < 4:
+        return "moderate stop intensity"
+    return "higher stop intensity"
+
+
+def format_land_use_signal(label: str | None) -> str:
+    if not label:
+        return "Not available"
+    if label == "Other":
+        return "Uncategorized land-use cells"
+    return label
+
+
+def format_typology_label(label: str | None) -> str:
+    label_map = {
+        "Dense urban fabric": "Compact urban areas",
+        "Mid-rise accessible mixed fabric": "Transit-connected urban areas",
+        "Mixed urban fabric": "Lower-rise mixed areas",
+    }
+    if not label:
+        return "Urban pattern summary"
+    return label_map.get(label, label)
+
+
+def format_anomaly_feature_label(feature_name: str) -> str:
+    if feature_name.startswith("cluster_share_cluster_"):
+        return "district pattern mix"
+    label_map = {
+        "population_density_km2": "population density",
+        "housing_per_1000_residents": "public housing per 1,000 residents",
+        "green_area_per_10000": "green-space provision",
+        "income_per_person": "income per person",
+        "household_income": "household income",
+        "unemployment_rate": "unemployment rate",
+        "vulnerability_index": "territorial vulnerability",
+        "vulnerability_employment": "employment vulnerability",
+        "grid_pt_access_good_share": "public transport access",
+        "grid_height_mean_avg": "average building height",
+        "grid_green_like_share": "green/open-land share",
+        "grid_dense_urban_share": "dense urban structure",
+    }
+    return label_map.get(feature_name, feature_name.replace("_", " "))
+
+
+def format_feature_list(items: list[str]) -> str:
+    if not items:
+        return "overall district profile"
+    if len(items) == 1:
+        return items[0]
+    if len(items) == 2:
+        return f"{items[0]} and {items[1]}"
+    return f"{', '.join(items[:-1])}, and {items[-1]}"
+
+
+def build_typology_topic_bridge(topic: str) -> str:
+    if topic == "land_use":
+        return "It adds a district-wide pattern view behind the land-use map."
+    if topic == "mobility":
+        return "It adds a district-wide pattern view behind the mobility map."
+    return "It adds a district-wide pattern view behind the height map."
+
+
+def get_typology_compare_payload(district_name: str) -> dict | None:
+    district_typology = DISTRICT_TYPOLOGY_LOOKUP.get(district_name)
+    if not district_typology:
+        return None
+
+    dominant_cluster_label = district_typology.get("dominant_cluster_label")
+    if not dominant_cluster_label:
+        return None
+
+    cluster_shares = district_typology.get("cluster_shares", {})
+    if not cluster_shares:
+        return None
+
+    dominant_profile = CLUSTER_PROFILE_LOOKUP.get(dominant_cluster_label, {})
+    sorted_shares = sorted(cluster_shares.items(), key=lambda item: item[1], reverse=True)
+    second_share = sorted_shares[1][1] if len(sorted_shares) > 1 else 0.0
+
+    return {
+        "district_name": district_name,
+        "dominant_cluster_label": dominant_cluster_label,
+        "dominant_label": format_typology_label(dominant_profile.get("narrative_label", dominant_cluster_label)),
+        "dominant_share": cluster_shares.get(dominant_cluster_label),
+        "cluster_shares": cluster_shares,
+        "sorted_shares": sorted_shares,
+        "mixed_structure": bool(sorted_shares and (sorted_shares[0][1] - second_share) < 0.15),
+    }
+
+
+def build_typology_mix_compare_rows(first_payload: dict, second_payload: dict) -> list[html.Div]:
+    cluster_labels = list(CLUSTER_PROFILE_LOOKUP.keys())
+    sorted_labels = sorted(
+        cluster_labels,
+        key=lambda label: max(
+            first_payload["cluster_shares"].get(label, 0.0),
+            second_payload["cluster_shares"].get(label, 0.0),
+        ),
+        reverse=True,
+    )
+    rows = []
+    for cluster_label in sorted_labels:
+        profile = CLUSTER_PROFILE_LOOKUP.get(cluster_label, {})
+        first_share = first_payload["cluster_shares"].get(cluster_label, 0.0)
+        second_share = second_payload["cluster_shares"].get(cluster_label, 0.0)
+        rows.append(
+            html.Div(
+                [
+                    html.Div(
+                        f"{first_share * 100:.0f}%",
+                        className="typology-compare-side typology-compare-side-first",
+                    ),
+                    html.Div(
+                        html.Div(
+                            className="typology-compare-bar-fill typology-compare-bar-fill-first",
+                            style={"width": f"{first_share * 100:.0f}%"},
+                        ),
+                        className="typology-compare-bar typology-compare-bar-first",
+                    ),
+                    html.Div(
+                        format_typology_label(profile.get("narrative_label", cluster_label)),
+                        className="typology-compare-pattern-label",
+                    ),
+                    html.Div(
+                        html.Div(
+                            className="typology-compare-bar-fill typology-compare-bar-fill-second",
+                            style={"width": f"{second_share * 100:.0f}%"},
+                        ),
+                        className="typology-compare-bar typology-compare-bar-second",
+                    ),
+                    html.Div(
+                        f"{second_share * 100:.0f}%",
+                        className="typology-compare-side typology-compare-side-second",
+                    ),
+                ],
+                className="typology-mix-row typology-compare-row",
+            )
+        )
+    return rows
+
+
+def build_typology_comparison_section(
+    first_district: str,
+    second_district: str,
+    topic: str,
+) -> html.Div:
+    first_payload = get_typology_compare_payload(first_district)
+    second_payload = get_typology_compare_payload(second_district)
+    if not first_payload or not second_payload:
+        return html.Div()
+
+    same_dominant_pattern = (
+        first_payload["dominant_cluster_label"] == second_payload["dominant_cluster_label"]
+    )
+    if same_dominant_pattern:
+        main_summary = [
+            "Both districts are mainly shaped by ",
+            first_payload["dominant_label"],
+            ", but their internal pattern mix still differs.",
+        ]
+    else:
+        main_summary = [
+            build_compare_district_name(first_district),
+            f" is more strongly shaped by {first_payload['dominant_label']}, while ",
+            build_compare_district_name(second_district),
+            f" is more strongly shaped by {second_payload['dominant_label']}.",
+        ]
+
+    all_cluster_labels = set(first_payload["cluster_shares"]) | set(second_payload["cluster_shares"])
+    largest_gap_label = None
+    largest_gap_value = -1.0
+    largest_gap_first = 0.0
+    largest_gap_second = 0.0
+    for cluster_label in all_cluster_labels:
+        first_share = first_payload["cluster_shares"].get(cluster_label, 0.0)
+        second_share = second_payload["cluster_shares"].get(cluster_label, 0.0)
+        gap = abs(first_share - second_share)
+        if gap > largest_gap_value:
+            largest_gap_value = gap
+            largest_gap_label = cluster_label
+            largest_gap_first = first_share
+            largest_gap_second = second_share
+
+    largest_gap_name = format_typology_label(
+        CLUSTER_PROFILE_LOOKUP.get(largest_gap_label, {}).get("narrative_label", largest_gap_label)
+    )
+    biggest_difference_text = [
+        f"The largest gap appears in {largest_gap_name}: ",
+        build_compare_district_name(first_district),
+        f" has {largest_gap_first * 100:.0f}% of district grid cells in this pattern, while ",
+        build_compare_district_name(second_district),
+        f" has {largest_gap_second * 100:.0f}%.",
+    ]
+
+    mixed_notes = []
+    if first_payload["mixed_structure"]:
+        mixed_notes.append(
+            [
+                build_compare_district_name(first_district),
+                " has a fairly mixed district structure, so its top pattern should be read as a broad summary.",
+            ]
+        )
+    if second_payload["mixed_structure"]:
+        mixed_notes.append(
+            [
+                build_compare_district_name(second_district),
+                " has a fairly mixed district structure, so its top pattern should be read as a broad summary.",
+            ]
+        )
+    if not mixed_notes:
+        mixed_notes.append(
+            "These pattern groups help compare broad spatial structure, but they do not explain why the districts differ."
+        )
+
+    return html.Div(
+        [
+            html.Details(
+                [
+                    html.Summary(
+                        [
+                            html.Div(
+                                [
+                                    html.Img(src=PANEL_ML_ICON, alt="", className="typology-summary-icon", draggable="false"),
+                                    html.Div(
+                                        [
+                                            html.Div("District pattern comparison", className="typology-summary-title"),
+                                            html.Div(
+                                                "Open for a short comparison of broad district patterns.",
+                                                className="typology-summary-subtitle",
+                                            ),
+                                        ],
+                                        className="typology-summary-text",
+                                    ),
+                                ],
+                                className="typology-summary-row",
+                            ),
+                            html.Div("Show", className="typology-summary-toggle"),
+                        ],
+                        className="typology-summary",
+                    ),
+                    html.Div(
+                        [
+                            html.Div("District pattern comparison", className="typology-card-eyebrow"),
+                            html.H3("How the two districts differ structurally", className="typology-card-result-title"),
+                            html.P(main_summary, className="typology-card-summary"),
+                            html.P(biggest_difference_text, className="typology-card-bridge"),
+                            html.Div(
+                                [
+                                    build_panel_heading_with_info(
+                                        "District pattern mix",
+                                        "This section compares how each district's grid cells are distributed across the 3 broad pattern groups.",
+                                        "Pattern mix comparison",
+                                    ),
+                                    html.Div(
+                                        [
+                                            html.Div(first_district, className="typology-compare-district typology-compare-district-first"),
+                                            html.Div("Pattern group", className="typology-compare-district typology-compare-district-center"),
+                                            html.Div(second_district, className="typology-compare-district typology-compare-district-second"),
+                                        ],
+                                        className="typology-compare-header",
+                                    ),
+                                    html.Div(
+                                        build_typology_mix_compare_rows(first_payload, second_payload),
+                                        className="typology-mix-list",
+                                    ),
+                                    build_panel_heading_with_info(
+                                        "How to read it",
+                                        "This comparison highlights broad structural differences. It does not explain why those differences exist or how every street behaves.",
+                                        "How to read it",
+                                    ),
+                                    html.P("This comparison works best as a broad spatial summary of the two districts rather than a final judgment about either one."),
+                                    build_panel_heading_with_info(
+                                        "Keep in mind",
+                                        "These points explain the main limits behind the comparison.",
+                                        "Keep in mind",
+                                    ),
+                                    html.Ul(
+                                        [
+                                            html.Li(
+                                                "This comparison combines data layers from different reference years. Use it as a broad structural comparison, not as a single-time snapshot."
+                                            ),
+                                            html.Li(
+                                                "The pattern groups are simplified summaries of similar grid cells, not official planning categories."
+                                            ),
+                                            *[html.Li(note) for note in mixed_notes],
+                                        ],
+                                        className="panel-meta-list",
+                                    ),
+                                ],
+                                className="typology-card-body",
+                            ),
+                        ],
+                        className="typology-card-content",
+                    ),
+                ],
+                className="metric-card typology-card typology-card-collapsible typology-compare-card",
+                open=False,
+            )
+        ],
+        className="typology-compare-shell",
+    )
+
+
+def build_typology_section(district_name: str, topic: str) -> html.Div | None:
+    district_typology = DISTRICT_TYPOLOGY_LOOKUP.get(district_name)
+    if not district_typology:
+        return None
+
+    dominant_cluster_label = district_typology.get("dominant_cluster_label")
+    if not dominant_cluster_label:
+        return None
+
+    dominant_profile = CLUSTER_PROFILE_LOOKUP.get(dominant_cluster_label)
+    if not dominant_profile:
+        return None
+
+    cluster_shares = district_typology.get("cluster_shares", {})
+    sorted_cluster_rows = sorted(
+        cluster_shares.items(),
+        key=lambda item: item[1],
+        reverse=True,
+    )
+    mix_rows = []
+    for cluster_label, share in sorted_cluster_rows:
+        profile = CLUSTER_PROFILE_LOOKUP.get(cluster_label, {})
+        mix_rows.append(
+            html.Div(
+                [
+                    html.Span(
+                        format_typology_label(profile.get("narrative_label", cluster_label)),
+                        className="typology-mix-label",
+                    ),
+                    html.Span(f"{share * 100:.0f}%", className="typology-mix-value"),
+                ],
+                className="typology-mix-row",
+            )
+        )
+
+    dominant_share = cluster_shares.get(dominant_cluster_label)
+    narrative_label = format_typology_label(dominant_profile.get("narrative_label", dominant_cluster_label))
+    dominant_land_use = format_land_use_signal(dominant_profile.get("dominant_land_use_class"))
+    evidence_points = [
+        f"Main land-use context: {dominant_land_use}",
+        f"Typical building form: {describe_height_band(dominant_profile.get('mean_height_mean'))} with an average height of {format_float(dominant_profile.get('mean_height_mean'), ' m', 1)}.",
+        f"Typical public transport access: {describe_pt_band(dominant_profile.get('mean_pt_stop_count'))} with about {format_float(dominant_profile.get('mean_pt_stop_count'), '', 1)} stops per grid cell.",
+    ]
+    interpretation_text = (
+        "This is the most common pattern across the district. It helps summarize the district as a whole, but it does not describe every street or block."
+    )
+    topic_bridge = build_typology_topic_bridge(topic)
+    caveat_text = (
+        "These pattern groups are not official planning categories. They are a simple summary of similar grid cells and work best as broad context."
+    )
+
+    return html.Details(
+        [
+            html.Summary(
+                [
+                    html.Div(
+                        [
+                            html.Img(src=PANEL_ML_ICON, alt="", className="typology-summary-icon", draggable="false"),
+                            html.Div(
+                                [
+                                    html.Div("District pattern", className="typology-summary-title"),
+                                    html.Div(
+                                        "Open for a short district-wide pattern summary.",
+                                        className="typology-summary-subtitle",
+                                    ),
+                                ],
+                                className="typology-summary-text",
+                            ),
+                        ],
+                        className="typology-summary-row",
+                    ),
+                    html.Div("Show", className="typology-summary-toggle"),
+                ],
+                className="typology-summary",
+            ),
+            html.Div(
+                [
+                    html.Div("District pattern summary", className="typology-card-eyebrow"),
+                    html.H3(narrative_label, className="typology-card-result-title"),
+                    html.P(format_typology_share(dominant_share), className="metric-label"),
+                    html.P(
+                        emphasize_numbers(
+                            f"This is the most common pattern across the district's grid cells. {topic_bridge}"
+                        ),
+                        className="typology-card-summary",
+                    ),
+                    html.Div(
+                        [
+                            build_panel_heading_with_info(
+                                "What shapes this pattern",
+                                "This section shows the main land-use, building-height, and public-transport signals behind the district-wide pattern.",
+                                "How this pattern was grouped",
+                            ),
+                            html.Ul([html.Li(point) for point in evidence_points], className="typology-list"),
+                            build_panel_heading_with_info(
+                                "District mix",
+                                "Most districts contain more than one pattern. This shows how the district's grid cells are split across the pattern groups.",
+                                "District mix",
+                            ),
+                            html.Div(mix_rows, className="typology-mix-list"),
+                            build_panel_heading_with_info(
+                                "How to read it",
+                                "Use this as a broad district summary rather than a final judgment about every part of the district.",
+                                "How to read it",
+                            ),
+                            html.P(emphasize_numbers(interpretation_text)),
+                            build_panel_heading_with_info(
+                                "What it uses",
+                                "This summary is built from the grid layer and groups similar cells into broad pattern types.",
+                                "What it uses",
+                            ),
+                            html.P(
+                                emphasize_numbers(
+                                    "This summary uses 250m grid cells with land use, building height, and stop-count information. Similar cells were grouped into 3 broad pattern types."
+                                )
+                            ),
+                            build_panel_heading_with_info(
+                                "Keep in mind",
+                                "This shows broad district structure, but it cannot explain causes or the exact condition of every street or block.",
+                                "Keep in mind",
+                            ),
+                            html.P(emphasize_numbers(caveat_text)),
+                        ],
+                        className="typology-card-body",
+                    ),
+                ],
+                className="typology-card-content",
+            ),
+        ],
+        className="metric-card typology-card typology-card-collapsible",
+        open=False,
+        key=f"typology-{district_name}-{topic}",
+    )
+
+
+def build_district_mismatch_section(district_name: str) -> html.Details | None:
+    anomaly_record = DISTRICT_ANOMALY_LOOKUP.get(district_name)
+    if not anomaly_record or not anomaly_record.get("anomaly_flag"):
+        return None
+
+    translated_features: list[str] = []
+    for feature_name in anomaly_record.get("top_contributing_features", [])[:3]:
+        translated = format_anomaly_feature_label(str(feature_name))
+        if translated not in translated_features:
+            translated_features.append(translated)
+
+    standout_rows = []
+    for index, feature_label in enumerate(translated_features, start=1):
+        standout_rows.append(
+            html.Div(
+                [
+                    html.Span(feature_label, className="typology-mix-label"),
+                    html.Span(str(index), className="typology-mix-value"),
+                ],
+                className="typology-mix-row",
+            )
+        )
+
+    return html.Details(
+        [
+            html.Summary(
+                [
+                    html.Div(
+                        [
+                            html.Img(src=PANEL_ML_ICON, alt="", className="typology-summary-icon", draggable="false"),
+                            html.Div(
+                                [
+                                    html.Div("Why it stands out", className="typology-summary-title"),
+                                    html.Div(
+                                        "Open for a short district-wide comparison note.",
+                                        className="typology-summary-subtitle",
+                                    ),
+                                ],
+                                className="typology-summary-text",
+                            ),
+                        ],
+                        className="typology-summary-row",
+                    ),
+                    html.Div("Show", className="typology-summary-toggle"),
+                ],
+                className="typology-summary",
+            ),
+            html.Div(
+                [
+                    html.Div("District comparison", className="typology-card-eyebrow"),
+                    html.P(
+                        emphasize_numbers(
+                            "This district stands out more than most others in the current district-level comparison."
+                        ),
+                        className="typology-card-summary",
+                    ),
+                    html.Div(
+                        [
+                            build_panel_heading_with_info(
+                                "Main factors",
+                                "These are the main factors behind why this district stands out in the current comparison.",
+                                "Main factors",
+                            ),
+                            html.Div(standout_rows, className="typology-mix-list"),
+                            html.H4("How to read it"),
+                            html.P(
+                                emphasize_numbers(
+                                    "This compares the district's overall profile with the other Madrid districts. It points to an unusual combination of characteristics, not just one extreme value."
+                                )
+                            ),
+                            html.P(
+                                emphasize_numbers(
+                                    "The main factors may extend beyond the topic currently selected in the map."
+                                )
+                            ),
+                            html.H4("Keep in mind"),
+                            html.P(
+                                emphasize_numbers(
+                                    "This is an exploratory result based on indicators from different sources and years. It is not a diagnosis or a causal explanation."
+                                )
+                            ),
+                        ],
+                        className="typology-card-body",
+                    ),
+                ],
+                className="typology-card-content",
+            ),
+        ],
+        className="metric-card typology-card typology-card-collapsible",
+        open=False,
+        key=f"anomaly-{district_name}",
+    )
+
+
 PIPELINE_STAGES = [
     {
         "id": "source_intake",
-        "title": "Source intake",
-        "subtitle": "Collect bounded sources",
+        "title": "Source inputs",
+        "subtitle": "Collect dataset",
         "status": "Complete",
-        "icon": PIPELINE_STAGE_SOURCE_ICON,
+        "icon_svg": PIPELINE_STAGE_SOURCE_SVG,
     },
     {
         "id": "cleaning",
-        "title": "Preprocessing & rules",
-        "subtitle": "Standardise and align",
+        "title": "Cleaning & alignment",
+        "subtitle": "Clean and standardise data",
         "status": "Complete",
-        "icon": PIPELINE_STAGE_CLEANING_ICON,
+        "icon_svg": PIPELINE_STAGE_CLEANING_SVG,
     },
     {
         "id": "topic_preparation",
-        "title": "Feature engineering",
-        "subtitle": "Build analysis tables",
+        "title": "Feature preparation",
+        "subtitle": "Build district and grid analysis tables",
         "status": "Active",
-        "icon": PIPELINE_STAGE_PREP_ICON,
+        "icon_svg": PIPELINE_STAGE_PREP_SVG,
     },
     {
         "id": "validation",
         "title": "Modeling & evaluation",
-        "subtitle": "Typologies and checks",
+        "subtitle": "Generate typologies and validate outputs",
         "status": "Complete",
-        "icon": PIPELINE_STAGE_VALIDATE_ICON,
+        "icon_svg": PIPELINE_STAGE_VALIDATE_SVG,
     },
     {
         "id": "representation",
-        "title": "Representation",
-        "subtitle": "Display in dashboard",
+        "title": "Dashboard translation",
+        "subtitle": "Turn outputs into dashboard views",
         "status": "Complete",
-        "icon": PIPELINE_STAGE_REPRESENT_ICON,
+        "icon_svg": PIPELINE_STAGE_REPRESENT_SVG,
     },
 ]
 
@@ -1587,6 +2544,390 @@ def get_pipeline_topic_label(topic: str | None) -> str:
         "height": "Building height",
     }
     return label_map.get(topic or "", "Topic not selected")
+
+
+def get_topic_source_details(topic: str | None) -> dict[str, str | list[tuple[str, str | None]]]:
+    source_map = {
+        "population": {
+            "sources_text": "Madrid Population API + Madrid district boundaries",
+            "reference_note": "Reference date is shown in the display view for the selected district.",
+            "source_links": [
+                ("Madrid Population API", "https://datos.madrid.es/dataset/300557-0-poblacion-distrito-barrio"),
+                ("District boundaries", "https://datos.madrid.es/dataset/900012-0-limites-administrativos-mapas"),
+            ],
+        },
+        "housing": {
+            "sources_text": "EMVS housing CSV + Madrid Population API + Madrid district boundaries",
+            "reference_note": "Coverage reflects the 1 June 2015 to 30 April 2023 housing source window used in the dashboard.",
+            "source_links": [
+                ("EMVS housing CSV", None),
+                ("Madrid Population API", "https://datos.madrid.es/dataset/300557-0-poblacion-distrito-barrio"),
+                ("District boundaries", "https://datos.madrid.es/dataset/900012-0-limites-administrativos-mapas"),
+            ],
+        },
+        "green": {
+            "sources_text": "Madrid district indicator panel + Madrid district boundaries",
+            "reference_note": "Indicator year is shown in the display view for the selected district.",
+            "source_links": [
+                ("Madrid district indicator panel", "https://datos.madrid.es/dataset/300087-0-indicadores-distritos"),
+                ("District boundaries", "https://datos.madrid.es/dataset/900012-0-limites-administrativos-mapas"),
+            ],
+        },
+        "economy": {
+            "sources_text": "Madrid district indicator panel + Madrid district boundaries",
+            "reference_note": "Indicator year is shown in the display view for the selected district.",
+            "source_links": [
+                ("Madrid district indicator panel", "https://datos.madrid.es/dataset/300087-0-indicadores-distritos"),
+                ("District boundaries", "https://datos.madrid.es/dataset/900012-0-limites-administrativos-mapas"),
+            ],
+        },
+        "employment": {
+            "sources_text": "Madrid district indicator panel + Madrid district boundaries",
+            "reference_note": "Indicator year is shown in the display view for the selected district.",
+            "source_links": [
+                ("Madrid district indicator panel", "https://datos.madrid.es/dataset/300087-0-indicadores-distritos"),
+                ("District boundaries", "https://datos.madrid.es/dataset/900012-0-limites-administrativos-mapas"),
+            ],
+        },
+        "vulnerability": {
+            "sources_text": "Madrid district indicator panel + Madrid district boundaries",
+            "reference_note": "Indicator year is shown in the display view for the selected district.",
+            "source_links": [
+                ("Madrid district indicator panel", "https://datos.madrid.es/dataset/300087-0-indicadores-distritos"),
+                ("District boundaries", "https://datos.madrid.es/dataset/900012-0-limites-administrativos-mapas"),
+            ],
+        },
+        "mobility": {
+            "sources_text": "Public transportation usage dataset (2018), Kaggle + Madrid district boundaries",
+            "reference_note": "The mobility layer currently uses the 2018 source slice shown in display mode.",
+            "source_links": [
+                ("Public transportation usage dataset (2018), Kaggle", "https://www.kaggle.com/datasets/dataguapa/madrid-public-transportation-data-2018"),
+                ("District boundaries", "https://datos.madrid.es/dataset/900012-0-limites-administrativos-mapas"),
+            ],
+        },
+        "land_use": {
+            "sources_text": "Urban Atlas-based 250m grid + Madrid district boundaries",
+            "reference_note": "Land-use layer reference year: 2018.",
+            "source_links": [
+                ("Urban Atlas", "https://land.copernicus.eu/en/products/urban-atlas"),
+                ("District boundaries", None),
+            ],
+        },
+        "height": {
+            "sources_text": "Urban Atlas building-height layer + Madrid district boundaries",
+            "reference_note": "The current source notes do not document a precise reference year for this layer.",
+            "source_links": [
+                ("Urban Atlas building height", "https://land.copernicus.eu/en/products/urban-atlas?tab=building_height"),
+                ("District boundaries", "https://datos.madrid.es/dataset/900012-0-limites-administrativos-mapas"),
+            ],
+        },
+    }
+    return source_map.get(
+        topic or "",
+        {
+            "sources_text": "Select a topic to load its source context.",
+            "reference_note": "Reference information appears once a topic is selected.",
+            "source_links": [],
+        },
+    )
+
+
+def get_pipeline_topic_context(topic: str | None) -> dict[str, str]:
+    context_map = {
+        "population": {
+            "source_type": "Official district dataset",
+            "inputs": "Madrid Population API and district boundaries",
+            "outputs": "District population totals and density values",
+        },
+        "housing": {
+            "source_type": "Official district dataset",
+            "inputs": "EMVS housing data, population data, and district boundaries",
+            "outputs": "District housing totals and housing per 1,000 residents",
+        },
+        "green": {
+            "source_type": "Official district dataset",
+            "inputs": "Madrid district indicator data and district boundaries",
+            "outputs": "District green-space totals and green-space provision values",
+        },
+        "economy": {
+            "source_type": "Official district dataset",
+            "inputs": "Madrid district indicator data and district boundaries",
+            "outputs": "District income indicators",
+        },
+        "employment": {
+            "source_type": "Official district dataset",
+            "inputs": "Madrid district indicator data and district boundaries",
+            "outputs": "District unemployment indicators",
+        },
+        "vulnerability": {
+            "source_type": "Official district dataset",
+            "inputs": "Madrid district indicator data, IGUALA-linked vulnerability indicators, and district boundaries",
+            "outputs": "District vulnerability indices",
+        },
+        "mobility": {
+            "source_type": "Processed 250m spatial layer",
+            "inputs": "Mobility source data, grid geometry, and district boundaries",
+            "outputs": "Grid-level stop-count values and district-filtered mobility cells",
+        },
+        "land_use": {
+            "source_type": "Processed 250m spatial layer",
+            "inputs": "Urban Atlas land-use classes, grid geometry, and district boundaries",
+            "outputs": "District-filtered land-use cells and land-use summaries",
+        },
+        "height": {
+            "source_type": "Processed 250m spatial layer",
+            "inputs": "Building-height layer, grid geometry, and district boundaries",
+            "outputs": "Grid-level building-height values and district height summaries",
+        },
+    }
+    return context_map.get(
+        topic or "",
+        {
+            "source_type": "Topic not selected yet",
+            "inputs": "Select a topic to load the relevant inputs",
+            "outputs": "Select a topic to see the resulting dashboard values",
+        },
+    )
+
+
+def get_pipeline_stage_artifact(stage_id: str, topic: str | None) -> dict[str, str] | None:
+    is_grid_topic = topic in GRID_TOPICS
+    if stage_id == "source_intake":
+        return {
+            "artifact_id": "collection_report",
+            "title": "Collected source report",
+            "filename": "collection_report.json",
+            "description": "",
+            "relative_path": "outputs/reports/collection_report.json",
+            "preview_kind": "collection_report",
+        }
+    if stage_id == "topic_preparation":
+        return {
+            "artifact_id": "grid_features" if is_grid_topic else "district_features",
+            "title": "Prepared grid feature table" if is_grid_topic else "Prepared district feature table",
+            "filename": "grid_features.csv" if is_grid_topic else "district_features.csv",
+            "description": "",
+            "relative_path": "outputs/ml/grid_features.csv" if is_grid_topic else "outputs/ml/district_features.csv",
+            "preview_kind": "grid_features" if is_grid_topic else "district_features",
+        }
+    if stage_id == "validation":
+        if not topic:
+            return None
+        return {
+            "artifact_id": "clustering_summary" if is_grid_topic else "anomaly_summary",
+            "title": "Clustering model summary" if is_grid_topic else "District standout summary",
+            "filename": "model_evaluation_summary.md",
+            "description": "",
+            "relative_path": "outputs/ml/model_evaluation_summary.md",
+            "preview_kind": "clustering_summary" if is_grid_topic else "anomaly_summary",
+        }
+    return None
+
+
+def build_pipeline_artifact_button(artifact: dict[str, str]) -> html.Button:
+    copy_children = [
+        html.Div(artifact["title"], className="pipeline-artifact-item-title"),
+        html.Div(artifact["filename"], className="pipeline-artifact-item-file"),
+    ]
+    if artifact["description"]:
+        copy_children.append(html.Div(artifact["description"], className="pipeline-artifact-item-text"))
+
+    return html.Button(
+        [
+            html.Div(
+                html.Img(src=PIPELINE_FILE_ICON, alt="", className="pipeline-artifact-item-icon", draggable="false"),
+                className="pipeline-artifact-item-icon-wrap",
+            ),
+            html.Div(copy_children, className="pipeline-artifact-item-copy"),
+            html.Div("Open", className="pipeline-artifact-item-toggle"),
+        ],
+        id={"type": "pipeline-artifact-button", "artifact": artifact["artifact_id"], "stage": artifact["preview_kind"]},
+        n_clicks=0,
+        className="pipeline-artifact-item",
+    )
+
+
+def get_pipeline_artifact_preview_columns(topic: str | None, preview_kind: str) -> list[str]:
+    if preview_kind == "district_features":
+        column_map = {
+            "population": ["district_name", "reference_date", "population_total", "population_density_km2"],
+            "housing": ["district_name", "housing_total", "housing_per_1000_residents", "has_housing_data"],
+            "green": ["district_name", "green_area_ha", "green_area_per_10000", "has_green_data"],
+            "economy": ["district_name", "income_per_person", "household_income", "has_economy_data"],
+            "employment": ["district_name", "unemployment_total", "unemployment_rate", "has_employment_data"],
+            "vulnerability": ["district_name", "vulnerability_index", "vulnerability_employment", "has_vulnerability_data"],
+        }
+        return column_map.get(topic or "", ["district_name", "reference_date"])
+    if preview_kind == "grid_features":
+        return [
+            "district_name",
+            "cell_id",
+            "lu_2018_class_simplified",
+            "height_mean",
+            "pt_stop_count",
+            "cluster_features_ready",
+        ]
+    return []
+
+
+def extract_markdown_table(markdown_text: str, heading: str) -> pd.DataFrame:
+    lines = markdown_text.splitlines()
+    in_section = False
+    table_lines: list[str] = []
+
+    for line in lines:
+        if line.strip() == heading:
+            in_section = True
+            continue
+        if in_section and line.startswith("## "):
+            break
+        if in_section and line.strip().startswith("|"):
+            table_lines.append(line)
+        elif in_section and table_lines:
+            break
+
+    if len(table_lines) < 2:
+        return pd.DataFrame()
+
+    cleaned_lines = [table_lines[0]]
+    cleaned_lines.extend(table_lines[2:])
+    csv_like = "\n".join(cleaned_lines)
+    frame = pd.read_csv(StringIO(csv_like), sep="|", engine="python")
+    frame = frame.drop(columns=[column for column in frame.columns if str(column).strip() == ""], errors="ignore")
+    frame.columns = [str(column).strip() for column in frame.columns]
+    frame = frame.loc[:, [column for column in frame.columns if not str(column).lower().startswith("unnamed:")]]
+    for column in frame.columns:
+        if frame[column].dtype == object:
+            frame[column] = frame[column].astype(str).str.strip()
+    return frame
+
+
+def format_pipeline_preview_value(value) -> str:
+    if isinstance(value, bool):
+        return "True" if value else "False"
+    if isinstance(value, (list, dict)):
+        return json.dumps(value, ensure_ascii=False)
+    if value is None:
+        return "—"
+    if pd.isna(value):
+        return "—"
+    if isinstance(value, float):
+        if value.is_integer():
+            return str(int(value))
+        return f"{value:.3f}".rstrip("0").rstrip(".")
+    return str(value)
+
+
+def build_pipeline_preview_table(frame: pd.DataFrame) -> html.Div:
+    if frame.empty:
+        return html.Div("No preview rows available for this artifact.", className="pipeline-artifact-preview-empty")
+
+    preview_frame = frame.copy()
+    return html.Div(
+        html.Table(
+            [
+                html.Thead(html.Tr([html.Th(column) for column in preview_frame.columns])),
+                html.Tbody(
+                    [
+                        html.Tr([html.Td(format_pipeline_preview_value(row[column])) for column in preview_frame.columns])
+                        for _, row in preview_frame.iterrows()
+                    ]
+                ),
+            ],
+            className="pipeline-artifact-table",
+        ),
+        className="pipeline-artifact-table-wrap",
+    )
+
+
+def build_pipeline_artifact_modal_content(
+    artifact: dict[str, str],
+    topic: str | None,
+    district_name: str,
+) -> tuple[str, str, str, html.Div]:
+    artifact_path = PROJECT_ROOT / artifact["relative_path"]
+    preview_kind = artifact["preview_kind"]
+    modal_title = artifact["title"]
+    modal_path = artifact["relative_path"]
+    modal_description = artifact["description"]
+
+    if preview_kind == "collection_report":
+        payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+        rows = pd.DataFrame(payload.get("sources", []))
+        preview_columns = [
+            column
+            for column in ["source_name", "source_type", "file_format", "acquisition_mode", "row_count", "column_count"]
+            if column in rows.columns
+        ]
+        preview_frame = rows.loc[:, preview_columns].head(8) if preview_columns else rows.head(8)
+        summary = f"{payload.get('source_count', len(rows))} collected sources are recorded in the current report."
+        body = html.Div(
+            [
+                html.P(summary, className="pipeline-artifact-modal-summary"),
+                build_pipeline_preview_table(preview_frame),
+            ]
+        )
+        return modal_title, modal_path, modal_description, body
+
+    if preview_kind == "feature_specs":
+        payload = json.loads(artifact_path.read_text(encoding="utf-8"))
+        spec_name = "grid_features" if topic in GRID_TOPICS else "district_features"
+        selected_spec = next((item for item in payload if item.get("name") == spec_name), payload[0] if payload else {})
+        columns = selected_spec.get("columns", [])
+        preview_frame = pd.DataFrame(
+            [
+                {
+                    "field": column.get("name"),
+                    "description": column.get("description"),
+                    "status": column.get("status"),
+                    "used_for_modeling": bool(column.get("used_for_clustering") or column.get("used_for_anomaly_detection")),
+                }
+                for column in columns[:8]
+            ]
+        )
+        body = html.Div(
+            [
+                html.P(selected_spec.get("purpose", "Prepared field specification."), className="pipeline-artifact-modal-summary"),
+                html.P(selected_spec.get("grain", ""), className="pipeline-artifact-modal-subsummary"),
+                build_pipeline_preview_table(preview_frame),
+            ]
+        )
+        return modal_title, modal_path, modal_description, body
+
+    if preview_kind in {"district_features", "grid_features"}:
+        frame = pd.read_csv(artifact_path)
+        if "district_name" in frame.columns:
+            district_frame = frame.loc[frame["district_name"] == district_name].copy()
+            if not district_frame.empty:
+                frame = district_frame
+        preview_columns = [column for column in get_pipeline_artifact_preview_columns(topic, preview_kind) if column in frame.columns]
+        preview_frame = frame.loc[:, preview_columns].head(8) if preview_columns else frame.head(8)
+        topic_label = get_pipeline_topic_label(topic)
+        modal_description_map = {
+            "district_features": f"This table shows a section of the prepared district-level {topic_label.lower()} dataset used in later pipeline steps.",
+            "grid_features": f"This table shows a section of the prepared grid-level {topic_label.lower()} dataset used in later pipeline steps.",
+            "cluster_mix": f"This table shows a section of the KMeans district pattern output for the {topic_label.lower()} topic.",
+            "district_anomalies": f"This table shows a section of the district anomaly output used to compare {topic_label.lower()} signals across Madrid.",
+        }
+        body = html.Div(
+            [build_pipeline_preview_table(preview_frame)]
+        )
+        return modal_title, modal_path, modal_description_map.get(preview_kind, modal_description), body
+
+    if preview_kind in {"clustering_summary", "anomaly_summary"}:
+        markdown_text = artifact_path.read_text(encoding="utf-8")
+        heading = "## Clustering" if preview_kind == "clustering_summary" else "## Anomaly Detection"
+        preview_frame = extract_markdown_table(markdown_text, heading).head(12)
+        topic_label = get_pipeline_topic_label(topic)
+        modal_description_map = {
+            "clustering_summary": f"This table shows a section of the KMeans evaluation summary used for the {topic_label.lower()} topic.",
+            "anomaly_summary": f"This table shows a section of the Isolation Forest summary used to compare {topic_label.lower()} signals across districts and identify which districts stand out.",
+        }
+        body = html.Div([build_pipeline_preview_table(preview_frame)])
+        return modal_title, modal_path, modal_description_map.get(preview_kind, modal_description), body
+
+    body = html.Div("Preview not available for this artifact.", className="pipeline-artifact-preview-empty")
+    return modal_title, modal_path, modal_description, body
 
 
 def hex_to_rgb(hex_color: str) -> tuple[int, int, int]:
@@ -1754,7 +3095,11 @@ def build_pipeline_stage_button(stage: dict, active_stage_id: str) -> html.Butto
     return html.Button(
         [
             html.Div(
-                html.Img(src=stage["icon"], className="pipeline-stage-icon", alt=""),
+                html.Img(
+                    src=build_pipeline_stage_icon(stage["icon_svg"], is_active),
+                    className="pipeline-stage-icon",
+                    alt="",
+                ),
                 className="pipeline-stage-icon-wrap",
             ),
             html.Div(
@@ -1828,7 +3173,7 @@ def build_pipeline_prompt_panel(district_name: str) -> html.Div:
                     html.H4("District in focus"),
                     html.P(f"{district_name} is ready for pipeline inspection."),
                     html.H4("Next step"),
-                    html.P("Choose a topic to see how collected sources become feature tables, model inputs, and final dashboard evidence."),
+                    html.P("Choose a topic to see how source data becomes prepared tables, model outputs, and final dashboard views."),
                 ],
                 className="panel-body",
             ),
@@ -1842,7 +3187,7 @@ def build_pipeline_empty_state() -> html.Div:
         [
             html.Div("Pipeline mode", className="pipeline-empty-title"),
             html.Div(
-                "Select 1 district to inspect how a topic moves from source intake through feature engineering and model evaluation into the dashboard.",
+                "Select 1 district to inspect how a topic moves from source inputs through preparation and evaluation into the dashboard.",
                 className="pipeline-empty-text",
             ),
         ],
@@ -1853,83 +3198,116 @@ def build_pipeline_empty_state() -> html.Div:
 def build_pipeline_stage_panel(stage_id: str, topic: str | None, district_name: str) -> html.Div:
     stage = get_pipeline_stage(stage_id)
     topic_label = get_pipeline_topic_label(topic)
-    topic_source = (
-        "Official district dataset"
-        if topic in {"population", "housing", "green", "economy", "employment", "vulnerability"}
-        else "Processed 250m spatial layer"
-        if topic in {"mobility", "land_use", "height"}
-        else "Topic not selected yet"
-    )
+    topic_context = get_pipeline_topic_context(topic)
+    source_details = get_topic_source_details(topic)
+    artifact = get_pipeline_stage_artifact(stage_id, topic)
+    stage_icon_src = build_pipeline_stage_icon(stage["icon_svg"], is_active=True)
     stage_text_map = {
         "source_intake": {
-            "provenance": f"{topic_source}. District focus: {district_name}.",
-            "action": f"Collect the bounded source inputs required for the {topic_label.lower()} view and register their provenance before any transformation happens.",
-            "notes": [
-                "Keep the selected district explicit from the beginning.",
-                "Record whether the topic comes from official district data or the research-derived 250m grid layer.",
-                "Surface missing source coverage before later stages hide it.",
-            ],
-            "why": "This stage makes the input origin visible before any transformation happens.",
+            "stage_summary": f"This stage gathers the raw inputs needed for the {topic_label.lower()} view in {district_name}.",
+            "action": "The workflow identifies the relevant source files or APIs and keeps their origin visible before later processing begins.",
+            "input": topic_context["inputs"],
+            "output": f"Raw topic inputs with visible source context. Source type: {topic_context['source_type']}.",
+            "why": "This stage makes it clear where the selected topic starts and whether it comes from district indicators or processed spatial data.",
+            "caveat": "A single topic can still combine sources from different years or source systems.",
         },
         "cleaning": {
-            "provenance": f"Preprocessing and compatibility rules for the {topic_label.lower()} topic.",
-            "action": "Normalise names, formats, units, and spatial keys so district-level and grid-level sources can be aligned consistently.",
-            "notes": [
-                "District names are canonicalised across files.",
-                "Missing or non-matching values are flagged instead of dropped silently.",
-                "Inherited district-level values remain distinguishable from observed cell-level values.",
-            ],
-            "why": "This stage keeps the dashboard readable by preventing mismatched labels and hidden data loss.",
+            "stage_summary": f"This stage makes the {topic_label.lower()} inputs compatible with one another.",
+            "action": "Names, formats, units, and spatial references are standardized so the topic can be prepared consistently.",
+            "input": "Raw source tables, files, and spatial references",
+            "output": "Cleaned topic inputs ready for table building",
+            "why": "This stage reduces mismatches between districts, values, and geometries before the dashboard reads them.",
+            "caveat": "Cleaning improves comparability, but it does not remove the limits of the original source data.",
         },
         "topic_preparation": {
-            "provenance": f"Topic-specific features prepared for {topic_label.lower()} in {district_name}.",
-            "action": "Translate cleaned inputs into shared district and grid feature tables that power the selected topic view and later ML steps.",
-            "notes": [
-                "District-native topics read from the district feature table.",
-                "Grid topics read from the 250m grid feature table filtered to the selected district.",
-                "Topic-specific controls, such as thresholds or class filters, are applied on top of shared features.",
-            ],
-            "why": "This is where raw inputs become the view-ready representation users actually inspect.",
+            "stage_summary": f"This stage builds the analysis tables used for the {topic_label.lower()} topic in {district_name}.",
+            "action": "Cleaned inputs are translated into district-level features or 250m grid features, depending on how the topic is represented in the dashboard.",
+            "input": "Cleaned topic inputs",
+            "output": topic_context["outputs"],
+            "why": "This is where raw data becomes the structured evidence that the selected topic actually displays.",
+            "caveat": "District topics and grid topics diverge here, so not every topic is prepared in the same way.",
         },
         "validation": {
-            "provenance": f"Modeling and evaluation context for {topic_label.lower()}.",
-            "action": "Check quality, caveats, and when relevant how the topic contributes to clustering, anomaly detection, and model evaluation outputs.",
-            "notes": [
-                "Districts without matching values remain visible and marked as unavailable.",
-                "Research-derived layers are labelled as processed spatial evidence.",
-                "Model evaluation warnings stay visible so unstable outputs are not presented as settled facts.",
-            ],
-            "why": "This stage supports explainability by making limits, caveats, and model uncertainty explicit before the dashboard presents them.",
+            "stage_summary": f"This stage checks how the prepared {topic_label.lower()} data contributes to modeling outputs and quality checks.",
+            "action": "Where relevant, the workflow generates typologies or anomaly signals and keeps evaluation results visible alongside those outputs.",
+            "input": "Prepared district and grid analysis tables",
+            "output": "Model outputs, warnings, and evaluation summaries",
+            "why": "This stage adds analytical interpretation while keeping uncertainty and caveats visible.",
+            "caveat": "These outputs are comparative and exploratory, not final diagnoses or planning decisions.",
         },
         "representation": {
-            "provenance": f"Final dashboard translation for {topic_label.lower()} in {district_name}.",
-            "action": "Render the prepared topic as a readable district-first view with controls, hover logic, and explanatory panel content.",
-            "notes": [
-                "Display mode remains district-first even when the topic uses grid cells.",
-                "Hover and panel content separate quick reading from deeper explanation.",
-                "UI controls stay topic-specific instead of exposing the full raw pipeline.",
-            ],
-            "why": "This is the stage where transparency becomes usable interface logic instead of hidden process detail.",
+            "stage_summary": f"This stage turns the prepared {topic_label.lower()} outputs into the dashboard view for {district_name}.",
+            "action": "The workflow maps prepared values into topic controls, hover behavior, and sidebar content so the data can be read as a coherent interface.",
+            "input": "Prepared topic tables and any relevant model outputs",
+            "output": "Readable dashboard views for the selected district and topic",
+            "why": "This is where technical outputs become usable planning evidence in the interface.",
+            "caveat": "The dashboard summarizes the workflow; it does not expose every internal transformation in full detail.",
         },
     }
     stage_text = stage_text_map[stage["id"]]
+    input_children: list = [html.P(stage_text["input"])]
+    if stage["id"] == "source_intake":
+        input_children = [
+            html.P(source_details["sources_text"], className="panel-meta-subtext"),
+            build_panel_meta_links(source_details["source_links"]),
+        ]
+        if artifact is not None:
+            input_children.extend(
+                [
+                    html.Div("Example artifact", className="pipeline-artifact-label"),
+                    build_pipeline_artifact_button(artifact),
+                ]
+            )
+
+    output_children: list = [html.P(stage_text["output"])]
+    if stage["id"] in {"cleaning", "topic_preparation", "validation"} and artifact is not None:
+        output_children.extend(
+            [
+                html.Div("Example artifact", className="pipeline-artifact-label"),
+                build_pipeline_artifact_button(artifact),
+            ]
+        )
+
+    meta_items = [
+        build_panel_meta_item(
+            PANEL_META_ALERT_ICON,
+            "Keep in mind",
+            html.P(stage_text["caveat"], className="panel-meta-text"),
+            tone="warning",
+        )
+    ]
 
     return html.Div(
         [
-            html.H2(stage["title"], className="panel-title"),
+            html.Div(
+                [
+                    html.Div(
+                        html.Img(src=stage_icon_src, className="pipeline-panel-stage-icon", alt=""),
+                        className="pipeline-panel-stage-icon-wrap",
+                    ),
+                    html.H2(stage["title"], className="panel-title"),
+                ],
+                className="pipeline-panel-stage-header",
+            ),
             html.P("Pipeline stage details", className="panel-subtitle"),
             html.Div(
                 [
-                    html.H4("Provenance"),
-                    html.P(stage_text["provenance"]),
-                    html.H4("What happens in this stage?"),
+                    html.H4("Stage"),
+                    html.P(stage_text["stage_summary"]),
+                    html.H4("What happens here?"),
                     html.P(stage_text["action"]),
-                    html.H4("Processing notes"),
-                    html.Ul([html.Li(note) for note in stage_text["notes"]]),
+                    html.H4("Input"),
+                    html.Div(input_children),
+                    html.H4("Output"),
+                    html.Div(output_children),
                     html.H4("Why this stage matters"),
                     html.P(stage_text["why"]),
                 ],
                 className="panel-body",
+            ),
+            html.Div(
+                meta_items,
+                className="panel-meta-grid pipeline-panel-meta-grid",
             ),
         ],
         className="right-panel-content",
@@ -2286,14 +3664,47 @@ app.layout = html.Div(
                     id="right-panel-controls",
                     className="right-panel-controls",
                 ),
+                html.Div(id="shared-topic-compare", className="shared-topic-compare"),
                 html.Div(id="district-panel", className="right-panel-body"),
             ],
             id="right-panel-region",
             className="app-right-panel",
         ),
+        html.Div(
+            [
+                html.Div(
+                    [
+                        html.Div(
+                            [
+                                html.Div(
+                                    [
+                                        html.Div(id="pipeline-artifact-modal-title", className="pipeline-artifact-modal-title"),
+                                        html.Div(id="pipeline-artifact-modal-path", className="pipeline-artifact-modal-path"),
+                                    ]
+                                ),
+                                html.Button(
+                                    "Close",
+                                    id="pipeline-artifact-modal-close",
+                                    n_clicks=0,
+                                    className="pipeline-artifact-modal-close",
+                                ),
+                            ],
+                            className="pipeline-artifact-modal-header",
+                        ),
+                        html.Div(id="pipeline-artifact-modal-description", className="pipeline-artifact-modal-description"),
+                        html.Div(id="pipeline-artifact-modal-body", className="pipeline-artifact-modal-body"),
+                    ],
+                    className="pipeline-artifact-modal-card",
+                )
+            ],
+            id="pipeline-artifact-modal",
+            className="pipeline-artifact-modal",
+            style={"display": "none"},
+        ),
         dcc.Store(id="selected-district-store", data=[]),
         dcc.Store(id="selected-topic-store", data=None),
         dcc.Store(id="metric-value-store", data=None),
+        dcc.Store(id="metric-memory-store", data={}),
         dcc.Store(id="metric-open-store", data=False),
         dcc.Store(id="land-use-filter-value-store", data=[]),
         dcc.Store(id="land-use-filter-open-store", data=False),
@@ -2302,6 +3713,7 @@ app.layout = html.Div(
         dcc.Store(id="view-mode-store", data=DEFAULT_VIEW_MODE),
         dcc.Store(id="display-selection-mode-store", data=DEFAULT_DISPLAY_SELECTION_MODE),
         dcc.Store(id="pipeline-stage-store", data=DEFAULT_PIPELINE_STAGE),
+        dcc.Store(id="pipeline-artifact-store", data=None),
     ],
     id="app-shell",
     className="app-shell",
@@ -2381,22 +3793,29 @@ def sync_mode_controls(
 @app.callback(
     Output("pipeline-stage-store", "data"),
     Input({"type": "pipeline-stage-button", "stage": ALL}, "n_clicks"),
-    Input("selected-topic-store", "data"),
+    Input("view-mode-store", "data"),
     State("pipeline-stage-store", "data"),
     prevent_initial_call=True,
 )
-def sync_pipeline_stage(stage_clicks: list[int], topic: str | None, current_stage: str | None):
+def sync_pipeline_stage(
+    stage_clicks: list[int],
+    view_mode: str | None,
+    current_stage: str | None,
+):
     triggered = callback_context.triggered_id
-    if triggered == "selected-topic-store":
+    if triggered == "view-mode-store" and view_mode == "pipeline":
         return DEFAULT_PIPELINE_STAGE
-    if isinstance(triggered, dict) and triggered.get("type") == "pipeline-stage-button":
+    if (
+        isinstance(triggered, dict)
+        and triggered.get("type") == "pipeline-stage-button"
+        and any(stage_clicks or [])
+    ):
         return triggered.get("stage", current_stage or DEFAULT_PIPELINE_STAGE)
     return current_stage or DEFAULT_PIPELINE_STAGE
 
 
 @app.callback(
     Output("selected-topic-store", "data"),
-    Output("metric-value-store", "data"),
     Output("metric-open-store", "data"),
     Output("topic-population", "className"),
     Output("topic-population", "disabled"),
@@ -2464,11 +3883,9 @@ def sync_topic(
     elif has_selected_district and triggered == "topic-vulnerability":
         topic = "vulnerability"
 
-    default_metric = build_metric_options(topic)[0]["value"] if topic else None
     is_disabled = not has_selected_district
     return (
         topic,
-        default_metric,
         False,
         topic_button_class(topic, "population", has_selected_district),
         is_disabled,
@@ -2684,7 +4101,6 @@ def update_layout_state(selected_districts: list[str] | None, is_collapsed: bool
     Input("selected-district-store", "data"),
     Input("mobility-threshold-slider", "value"),
     Input("land-use-filter-value-store", "data"),
-    Input("district-map", "hoverData"),
 )
 def update_map(
     metric: str | None,
@@ -2692,16 +4108,10 @@ def update_map(
     selected_districts: list[str] | None,
     mobility_threshold: int,
     land_use_filter: list[str] | None,
-    hover_data: dict | None,
 ):
     normalized_selection = canonicalise_selected_districts(selected_districts)
     if not normalized_selection:
         return build_grid_base_figure()
-
-    active_district = get_active_map_district(selected_districts)
-    hovered_district_name = None
-    if hover_data and hover_data.get("points"):
-        hovered_district_name = resolve_click_district_name(hover_data["points"][0], active_district)
 
     if topic == "land_use" and metric:
         figure = build_land_use_map(selected_districts, land_use_filter)
@@ -2721,7 +4131,6 @@ def update_map(
         )
     else:
         figure = build_grid_base_figure()
-    figure = add_hovered_district_outline(figure, hovered_district_name, selected_districts)
     figure = add_selected_district_outlines(figure, selected_districts)
     return figure
 
@@ -2772,6 +4181,7 @@ def update_center_mode(
     Output("map-selection-title", "children"),
     Output("map-selection-info", "children"),
     Output("map-topic-info", "children"),
+    Output("shared-topic-compare", "children"),
     Output("right-panel-region", "className"),
     Output("right-panel-controls", "style"),
     Input("selected-district-store", "data"),
@@ -2794,11 +4204,13 @@ def update_panel(
     normalized_selection = canonicalise_selected_districts(selected_districts)
     selected_count = len(normalized_selection)
     controls_style = {"display": "block"} if topic and view_mode == "display" else {"display": "none"}
+    grid_typology_topics = {"land_use", "height", "mobility"}
 
     if selected_count == 0:
         return (
             [],
             "Madrid",
+            html.Div(),
             html.Div(),
             html.Div(),
             "app-right-panel app-right-panel-hidden",
@@ -2823,6 +4235,7 @@ def update_panel(
                 district_name,
                 build_toolbar_info_bubble(subtitle, "Pipeline help"),
                 html.Div(),
+                html.Div(),
                 "app-right-panel app-right-panel-single",
                 {"display": "none"},
             )
@@ -2833,9 +4246,10 @@ def update_panel(
                 topic,
                 mobility_threshold or DEFAULT_MOBILITY_THRESHOLD,
                 land_use_filter,
+                panel_position=1,
             )
             if topic and metric
-            else build_topic_prompt_panel(district_name)
+            else build_topic_prompt_panel(district_name, panel_position=1)
         )
         subtitle = (
             "Shared topic controls are now unlocked for this district."
@@ -2847,12 +4261,14 @@ def update_panel(
             district_name,
             build_toolbar_info_bubble(subtitle, "Topic help"),
             html.Div(),
+            html.Div(),
             "app-right-panel app-right-panel-single",
             controls_style,
         )
 
     first_district = normalized_selection[0]
     second_district = normalized_selection[1]
+    show_shared_typology_compare = bool(topic and metric and topic in grid_typology_topics)
     first_panel = (
         build_info_panel(
             first_district,
@@ -2860,9 +4276,12 @@ def update_panel(
             topic,
             mobility_threshold or DEFAULT_MOBILITY_THRESHOLD,
             land_use_filter,
+            show_typology_section=not show_shared_typology_compare,
+            show_anomaly_section=False,
+            panel_position=1,
         )
         if topic and metric
-        else build_topic_prompt_panel(first_district, is_comparison=True)
+        else build_topic_prompt_panel(first_district, is_comparison=True, panel_position=1)
     )
     second_panel = (
         build_info_panel(
@@ -2871,9 +4290,12 @@ def update_panel(
             topic,
             mobility_threshold or DEFAULT_MOBILITY_THRESHOLD,
             land_use_filter,
+            show_typology_section=not show_shared_typology_compare,
+            show_anomaly_section=False,
+            panel_position=2,
         )
         if topic and metric
-        else build_topic_prompt_panel(second_district, is_comparison=True)
+        else build_topic_prompt_panel(second_district, is_comparison=True, panel_position=2)
     )
     subtitle = ""
     comparison_message = (
@@ -2889,6 +4311,11 @@ def update_panel(
         f"{first_district} vs {second_district}",
         build_map_info_bubble(comparison_message),
         html.Div(),
+        (
+            build_typology_comparison_section(first_district, second_district, topic)
+            if show_shared_typology_compare
+            else html.Div()
+        ),
         "app-right-panel app-right-panel-double",
         controls_style,
     )
@@ -2956,34 +4383,158 @@ def render_metric_filter(topic: str, selected_value: str, is_open: bool):
 
 
 @app.callback(
-    Output("metric-value-store", "data", allow_duplicate=True),
     Output("metric-open-store", "data", allow_duplicate=True),
     Input("metric-filter-toggle", "n_clicks"),
     Input({"type": "metric-option", "value": ALL}, "n_clicks"),
-    State("selected-topic-store", "data"),
-    State("metric-value-store", "data"),
     State("metric-open-store", "data"),
     prevent_initial_call=True,
 )
-def sync_metric_filter(
+def sync_metric_open_state(
     toggle_clicks: int,
     option_clicks: list[int],
-    topic: str | None,
-    current_value: str | None,
     is_open: bool,
 ):
-    if not topic:
-        return None, False
-
     triggered = callback_context.triggered_id
 
     if triggered == "metric-filter-toggle":
-        return current_value or build_metric_options(topic)[0]["value"], not bool(is_open)
+        return not bool(is_open)
 
-    if isinstance(triggered, dict) and triggered.get("type") == "metric-option":
-        return triggered.get("value", build_metric_options(topic)[0]["value"]), False
+    if (
+        isinstance(triggered, dict)
+        and triggered.get("type") == "metric-option"
+        and any(option_clicks or [])
+    ):
+        return False
 
-    return current_value or build_metric_options(topic)[0]["value"], bool(is_open)
+    return bool(is_open)
+
+
+@app.callback(
+    Output("metric-value-store", "data"),
+    Output("metric-memory-store", "data"),
+    Input("selected-topic-store", "data"),
+    Input({"type": "metric-option", "value": ALL}, "n_clicks"),
+    State("metric-memory-store", "data"),
+    prevent_initial_call=True,
+)
+def sync_metric_state(
+    topic: str | None,
+    option_clicks: list[int],
+    metric_memory: dict[str, str] | None,
+):
+    triggered = callback_context.triggered_id
+    current_memory = dict(metric_memory or {})
+
+    if triggered == "selected-topic-store":
+        if not topic:
+            return None, current_memory
+
+        saved_metric = current_memory.get(topic)
+        valid_metric_values = {option["value"] for option in build_metric_options(topic)}
+        if saved_metric in valid_metric_values:
+            return saved_metric, current_memory
+        return build_metric_options(topic)[0]["value"], current_memory
+
+    if (
+        isinstance(triggered, dict)
+        and triggered.get("type") == "metric-option"
+        and topic
+        and any(option_clicks or [])
+    ):
+        selected_metric = triggered.get("value", build_metric_options(topic)[0]["value"])
+        current_memory[topic] = selected_metric
+        return selected_metric, current_memory
+
+    return no_update, current_memory
+
+
+@app.callback(
+    Output("pipeline-artifact-store", "data"),
+    Input({"type": "pipeline-artifact-button", "artifact": ALL, "stage": ALL}, "n_clicks"),
+    Input("pipeline-artifact-modal-close", "n_clicks"),
+    Input("selected-topic-store", "data"),
+    Input("selected-district-store", "data"),
+    Input("pipeline-stage-store", "data"),
+    Input("view-mode-store", "data"),
+    State("pipeline-artifact-store", "data"),
+    prevent_initial_call=True,
+)
+def sync_pipeline_artifact_modal(
+    artifact_clicks: list[int],
+    close_clicks: int,
+    topic: str | None,
+    selected_districts: list[str] | None,
+    pipeline_stage: str | None,
+    view_mode: str | None,
+    current_artifact: dict[str, str] | None,
+):
+    triggered = callback_context.triggered_id
+
+    if triggered in (
+        "pipeline-artifact-modal-close",
+        "selected-topic-store",
+        "selected-district-store",
+        "pipeline-stage-store",
+    ):
+        return None
+
+    if triggered == "view-mode-store":
+        return None
+
+    if (
+        isinstance(triggered, dict)
+        and triggered.get("type") == "pipeline-artifact-button"
+        and any(artifact_clicks or [])
+    ):
+        artifact = get_pipeline_stage_artifact(pipeline_stage, topic)
+        if artifact is None:
+            return None
+        return {
+            **artifact,
+            "topic": topic,
+            "district_name": (canonicalise_selected_districts(selected_districts) or [DEFAULT_DISTRICT])[0],
+        }
+
+    return current_artifact
+
+
+@app.callback(
+    Output("pipeline-artifact-modal", "className"),
+    Output("pipeline-artifact-modal", "style"),
+    Output("pipeline-artifact-modal-title", "children"),
+    Output("pipeline-artifact-modal-path", "children"),
+    Output("pipeline-artifact-modal-description", "children"),
+    Output("pipeline-artifact-modal-body", "children"),
+    Input("pipeline-artifact-store", "data"),
+    State("selected-topic-store", "data"),
+    State("selected-district-store", "data"),
+)
+def render_pipeline_artifact_modal(
+    artifact_state: dict[str, str] | None,
+    topic: str | None,
+    selected_districts: list[str] | None,
+):
+    if not artifact_state:
+        return "pipeline-artifact-modal", {"display": "none"}, "", "", "", []
+
+    district_name = (canonicalise_selected_districts(selected_districts) or [artifact_state.get("district_name", DEFAULT_DISTRICT)])[0]
+    artifact = {
+        key: value
+        for key, value in artifact_state.items()
+        if key in {"artifact_id", "title", "filename", "description", "relative_path", "preview_kind"}
+    }
+    if not artifact:
+        return "pipeline-artifact-modal", {"display": "none"}, "", "", "", []
+
+    modal_title, modal_path, modal_description, modal_body = build_pipeline_artifact_modal_content(artifact, topic, district_name)
+    return (
+        "pipeline-artifact-modal pipeline-artifact-modal-open",
+        {"display": "flex"},
+        modal_title,
+        modal_path,
+        modal_description,
+        modal_body,
+    )
 
 
 @app.callback(
@@ -3021,6 +4572,7 @@ def toggle_land_use_filter(topic: str | None, district_names: list[str] | None, 
     Input({"type": "land-use-filter-action", "value": ALL}, "n_clicks"),
     Input("selected-topic-store", "data"),
     Input("selected-district-store", "data"),
+    Input("display-selection-mode-store", "data"),
     State("land-use-filter-value-store", "data"),
     State("land-use-filter-open-store", "data"),
 )
@@ -3030,6 +4582,7 @@ def sync_land_use_filter(
     action_clicks: list[int],
     topic: str | None,
     district_names: list[str] | None,
+    display_selection_mode: str | None,
     current_value: list[str] | None,
     is_open: bool,
 ):
@@ -3040,7 +4593,11 @@ def sync_land_use_filter(
     normalized_values = normalise_land_use_filter_values(current_value, district_names)
     triggered = callback_context.triggered_id
 
-    if triggered in ("selected-topic-store", "selected-district-store"):
+    if triggered in (
+        "selected-topic-store",
+        "selected-district-store",
+        "display-selection-mode-store",
+    ):
         return available_values, False
 
     if triggered == "land-use-filter-toggle":

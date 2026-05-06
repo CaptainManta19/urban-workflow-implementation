@@ -7,17 +7,15 @@ from src.feature_engineering import (
 )
 from src.modeling.anomaly import (
     fit_isolation_forest_anomaly,
-    fit_local_outlier_factor_anomaly,
     save_anomaly_artifacts,
 )
 from src.modeling.clustering import (
-    fit_gaussian_mixture_typology,
     fit_kmeans_typology,
     save_clustering_artifacts,
 )
 from src.modeling.evaluation import (
-    compare_anomaly_models,
     evaluate_clustering_candidates,
+    evaluate_isolation_forest,
     render_evaluation_markdown,
     save_evaluation_summary,
 )
@@ -37,25 +35,18 @@ def run_pipeline() -> None:
 
     print("Running clustering models...")
     kmeans_artifacts = fit_kmeans_typology(grid_features)
-    gmm_artifacts = fit_gaussian_mixture_typology(grid_features)
     kmeans_manifest = save_clustering_artifacts(kmeans_artifacts)
-    gmm_manifest = save_clustering_artifacts(gmm_artifacts)
 
     print("Running anomaly models...")
     iforest_artifacts = fit_isolation_forest_anomaly(
         district_features,
         kmeans_artifacts.district_cluster_mix,
     )
-    lof_artifacts = fit_local_outlier_factor_anomaly(
-        district_features,
-        kmeans_artifacts.district_cluster_mix,
-    )
     iforest_manifest = save_anomaly_artifacts(iforest_artifacts)
-    lof_manifest = save_anomaly_artifacts(lof_artifacts)
 
     print("Evaluating model behavior...")
     clustering_evaluation = evaluate_clustering_candidates(grid_features)
-    anomaly_evaluation = compare_anomaly_models(
+    anomaly_evaluation = evaluate_isolation_forest(
         district_features,
         kmeans_artifacts.district_cluster_mix,
     )
@@ -72,14 +63,9 @@ def run_pipeline() -> None:
     print_path("KMeans grid clusters", kmeans_manifest.grid_cluster_path)
     print_path("KMeans cluster profiles", kmeans_manifest.cluster_profile_path)
     print_path("KMeans district cluster mix", kmeans_manifest.district_cluster_mix_path)
-    print_path("GaussianMixture grid clusters", gmm_manifest.grid_cluster_path)
-    print_path("GaussianMixture cluster profiles", gmm_manifest.cluster_profile_path)
-    print_path("GaussianMixture district cluster mix", gmm_manifest.district_cluster_mix_path)
     print_path("IsolationForest district anomalies", iforest_manifest.district_anomaly_path)
-    print_path("LocalOutlierFactor district anomalies", lof_manifest.district_anomaly_path)
     print_path("Evaluation summary", evaluation_summary_path)
     print(f"KMeans silhouette: {kmeans_artifacts.silhouette}")
-    print(f"GaussianMixture silhouette: {gmm_artifacts.silhouette}")
     if clustering_evaluation.warnings:
         print("Clustering warnings:")
         for warning in clustering_evaluation.warnings:
