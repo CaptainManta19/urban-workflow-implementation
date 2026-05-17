@@ -91,6 +91,10 @@ def make_source_name(file_path: Path) -> str:
     return make_display_name(file_path.stem)
 
 
+def print_collection_progress(message: str) -> None:
+    print(message, flush=True)
+
+
 def to_project_relative(path: Path, project_root: Path) -> str:
     resolved_path = path.resolve()
 
@@ -459,6 +463,11 @@ def build_manifest_context(
     )
 
 
+def describe_manifest_source(spec: SourceSpecification) -> str:
+    acquisition_label = "API" if spec.acquisition_mode == "api" else spec.acquisition_mode.replace("_", " ")
+    return f"{spec.source_id} ({acquisition_label}, {spec.file_format})"
+
+
 def materialise_manifest_source(
     spec: SourceSpecification,
     project_root: Path,
@@ -495,11 +504,17 @@ def materialise_manifest_source(
 
     try:
         if spec.acquisition_mode == "api" and spec.file_format == "json":
+            print_collection_progress(
+                f"Fetching manifest source: {describe_manifest_source(spec)}"
+            )
             payload, content_type, fetch_decisions = fetch_paginated_ckan_payload(
                 spec.url,
                 spec.params,
             )
         else:
+            print_collection_progress(
+                f"Downloading manifest source: {describe_manifest_source(spec)}"
+            )
             payload, content_type = fetch_remote_bytes(request_url)
         cache_path.write_bytes(payload)
         decision = (
@@ -988,6 +1003,7 @@ def collect_sources_from_project_root(project_root: Path) -> tuple[list[Collecte
             context = build_raw_scan_context(file_path)
 
             try:
+                print_collection_progress(f"Collecting local source: {file_path.name}")
                 source = collect_source_from_path(file_path, project_root, collected_at, context)
                 collected_sources.append(source)
                 collected_source_ids.add(source.source_id)
@@ -1010,6 +1026,7 @@ def collect_sources_from_project_root(project_root: Path) -> tuple[list[Collecte
         )
 
     try:
+        print_collection_progress("Loading source catalog: data/source_catalog.json")
         manifest_specs, manifest_skips, manifest_path, manifest_source_count = load_source_catalog(
             project_root
         )
@@ -1037,6 +1054,7 @@ def collect_sources_from_project_root(project_root: Path) -> tuple[list[Collecte
             continue
 
         try:
+            print_collection_progress(f"Preparing manifest source: {describe_manifest_source(spec)}")
             file_path, context = materialise_manifest_source(spec, project_root, collected_at)
 
             if spec.acquisition_mode == "local_file" and str(file_path.resolve()) in collected_paths:
@@ -1049,6 +1067,7 @@ def collect_sources_from_project_root(project_root: Path) -> tuple[list[Collecte
                 )
                 continue
 
+            print_collection_progress(f"Collecting manifest source: {context.source_name}")
             source = collect_source_from_path(file_path, project_root, collected_at, context)
             collected_sources.append(source)
             collected_source_ids.add(source.source_id)

@@ -159,6 +159,7 @@ def print_collection_details(collection_report: dict, sources: list) -> None:
 
 
 def main() -> None:
+    print("Starting source collection...", flush=True)
     sources, collection_report = collect_sources()
     report_path = save_collection_report(collection_report)
     collection_report_dict = collection_report.model_dump(mode="json")
