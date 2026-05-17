@@ -1,18 +1,30 @@
 from pathlib import Path
 
-from run_ml_pipeline import run_pipeline
-from src.collection import collect_sources, save_collection_report
+from backend.workflow.ml_pipeline import run_pipeline
+from backend.workflow.source_collection import collect_sources, save_collection_report
 
 
-def ask_to_continue(message: str) -> bool:
+def ask_to_continue_or_inspect(message: str) -> str:
     while True:
-        response = input(f"{message} (y/n): ").strip().lower()
+        response = input(f"\n{message} [y]es / [n]o / [i]nspect details: ").strip().lower()
 
+        if response in {"y", "yes"}:
+            return "yes"
+        if response in {"n", "no"}:
+            return "no"
+        if response in {"i", "inspect"}:
+            return "inspect"
+
+        print("Please enter 'y', 'n', or 'i'.")
+
+
+def ask_yes_no(message: str) -> bool:
+    while True:
+        response = input(f"\n{message} [y]es / [n]o: ").strip().lower()
         if response in {"y", "yes"}:
             return True
         if response in {"n", "no"}:
             return False
-
         print("Please enter 'y' or 'n'.")
 
 
@@ -40,14 +52,49 @@ def format_local_path(path_value: str) -> str:
         return path_value
 
 
-def review_collection_report(collection_report: dict, sources: list) -> None:
-    print("\nCOLLECTED SOURCES")
-    print("-" * 40)
+def print_section_title(title: str) -> None:
+    print(f"\n{title}")
+    print("-" * len(title))
+
+
+def format_count(value: int) -> str:
+    return f"{value:,}"
+
+
+def print_collection_summary(report_path: Path, collection_report: dict) -> None:
+    print_section_title("Source Collection Completed")
+    print(f"Report saved to: {report_path}")
 
     manifest_path = collection_report.get("manifest_path")
     if manifest_path:
-        print(f"Manifest: {manifest_path}")
-        print(f"Manifest entries: {collection_report.get('manifest_source_count', 0)}")
+        print(f"Source catalog: {manifest_path}")
+
+    print("")
+    print(f"Collected sources: {format_count(collection_report.get('source_count', 0))}")
+    print(f"Skipped items: {format_count(len(collection_report.get('skipped_items', [])))}")
+    print(f"Warnings: {format_count(len(collection_report.get('warnings', [])))}")
+    print("")
+
+
+def print_collection_overview(sources: list) -> None:
+    print_section_title("Collected Source Overview")
+    for source in sources:
+        meta = source.source_metadata
+        print(
+            f"- {source.source_id} | {meta.source_name} | "
+            f"{format_source_type(meta.source_type)} | "
+            f"{format_count(meta.row_count)} rows | {format_count(meta.column_count)} columns"
+        )
+    print("")
+
+
+def print_collection_details(collection_report: dict, sources: list) -> None:
+    print_section_title("Collected Source Details")
+
+    manifest_path = collection_report.get("manifest_path")
+    if manifest_path:
+        print(f"Source catalog: {manifest_path}")
+        print(f"Catalog entries: {collection_report.get('manifest_source_count', 0)}")
         print("-" * 40)
 
     for source in sources:
@@ -98,8 +145,7 @@ def review_collection_report(collection_report: dict, sources: list) -> None:
 
     skipped_items = collection_report.get("skipped_items", [])
     if skipped_items:
-        print("\nSKIPPED ITEMS")
-        print("-" * 40)
+        print_section_title("Skipped Items")
         for skipped_item in skipped_items:
             print(
                 f"{skipped_item['item_origin']} | {skipped_item['item_label']}: {skipped_item['reason']}"
@@ -107,8 +153,7 @@ def review_collection_report(collection_report: dict, sources: list) -> None:
 
     collection_warnings = collection_report.get("warnings", [])
     if collection_warnings:
-        print("\nCOLLECTION WARNINGS")
-        print("-" * 40)
+        print_section_title("Collection Warnings")
         for warning in collection_warnings:
             print(f"- {warning}")
 
@@ -116,19 +161,30 @@ def review_collection_report(collection_report: dict, sources: list) -> None:
 def main() -> None:
     sources, collection_report = collect_sources()
     report_path = save_collection_report(collection_report)
-    print(f"\nSaved collection report to: {report_path}")
+    collection_report_dict = collection_report.model_dump(mode="json")
 
-    review_collection_report(
-        collection_report=collection_report.model_dump(mode="json"),
-        sources=sources,
-    )
+    print_collection_summary(report_path=report_path, collection_report=collection_report_dict)
+    print_collection_overview(sources)
 
-    approved = ask_to_continue(
-        "Continue with feature engineering, clustering, anomaly detection, and evaluation?"
-    )
-    if not approved:
-        print("Workflow stopped after source collection.")
-        return
+    while True:
+        user_choice = ask_to_continue_or_inspect(
+            "Continue with feature engineering, clustering, anomaly detection, and evaluation?"
+        )
+        if user_choice == "inspect":
+            print_collection_details(
+                collection_report=collection_report_dict,
+                sources=sources,
+            )
+            if ask_yes_no(
+                "Continue with feature engineering, clustering, anomaly detection, and evaluation?"
+            ):
+                break
+            print("Workflow stopped after source collection.")
+            return
+        if user_choice == "no":
+            print("Workflow stopped after source collection.")
+            return
+        break
 
     run_pipeline()
 

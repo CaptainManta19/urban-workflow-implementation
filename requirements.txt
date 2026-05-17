@@ -6,3 +6,4 @@ geopandas
 pyogrio
 pyproj
 shapely
+tabulate

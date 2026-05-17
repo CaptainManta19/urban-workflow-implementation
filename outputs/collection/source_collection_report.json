@@ -1,0 +1,123 @@
+{
+  "status": "warning",
+  "collected_at": "2026-05-15T11:19:19.471552Z",
+  "raw_data_path": "/Users/felix/CODING/M_DDD/Block_D/urban-workflow-implementation/data/raw",
+  "manifest_path": "data/source_catalog.json",
+  "manifest_source_count": 3,
+  "source_count": 7,
+  "sources": [
+    {
+      "source_id": "emvs_housing",
+      "source_name": "Emvs Housing",
+      "source_type": "tabular",
+      "file_format": "csv",
+      "acquisition_mode": "local_file",
+      "row_count": 23,
+      "column_count": 6,
+      "inferred_reference_year": null,
+      "selected_layer": null,
+      "origin_url": null,
+      "cache_path": null,
+      "warning_count": 2
+    },
+    {
+      "source_id": "madrid_grid_250m_lu_height_transport_rent_emvs_district",
+      "source_name": "Madrid Grid 250M Lu Height Transport Rent Emvs District",
+      "source_type": "geospatial",
+      "file_format": "geopackage",
+      "acquisition_mode": "local_file",
+      "row_count": 10100,
+      "column_count": 12,
+      "inferred_reference_year": null,
+      "selected_layer": "grid_250m_lu_height_transport_rent_emvs_district",
+      "origin_url": null,
+      "cache_path": null,
+      "warning_count": 1
+    },
+    {
+      "source_id": "public_transportation_usage_2018",
+      "source_name": "Public Transportation Usage 2018",
+      "source_type": "tabular",
+      "file_format": "csv",
+      "acquisition_mode": "local_file",
+      "row_count": 76759,
+      "column_count": 13,
+      "inferred_reference_year": 2018,
+      "selected_layer": null,
+      "origin_url": null,
+      "cache_path": null,
+      "warning_count": 2
+    },
+    {
+      "source_id": "urban_atlas_lu_2018",
+      "source_name": "Urban Atlas Lu 2018",
+      "source_type": "geospatial",
+      "file_format": "geopackage",
+      "acquisition_mode": "local_file",
+      "row_count": 105392,
+      "column_count": 12,
+      "inferred_reference_year": 2018,
+      "selected_layer": "ES001L3_MADRID_UA2018",
+      "origin_url": null,
+      "cache_path": null,
+      "warning_count": 1
+    },
+    {
+      "source_id": "madrid_population_district_barrio_api",
+      "source_name": "Madrid Population By District And Barrio API",
+      "source_type": "tabular",
+      "file_format": "json",
+      "acquisition_mode": "api",
+      "row_count": 1071,
+      "column_count": 11,
+      "inferred_reference_year": null,
+      "selected_layer": null,
+      "origin_url": "https://datos.madrid.es/api/3/action/datastore_search",
+      "cache_path": "data/fetched/madrid_population_district_barrio_api.json",
+      "warning_count": 2
+    },
+    {
+      "source_id": "madrid_district_indicator_panel_api",
+      "source_name": "Madrid District Indicator Panel API",
+      "source_type": "tabular",
+      "file_format": "json",
+      "acquisition_mode": "api",
+      "row_count": 116930,
+      "column_count": 19,
+      "inferred_reference_year": null,
+      "selected_layer": null,
+      "origin_url": "https://datos.madrid.es/api/3/action/datastore_search",
+      "cache_path": "data/fetched/madrid_district_indicator_panel_api.json",
+      "warning_count": 2
+    },
+    {
+      "source_id": "madrid_district_boundaries_remote",
+      "source_name": "Madrid District Boundaries",
+      "source_type": "geospatial",
+      "file_format": "json",
+      "acquisition_mode": "remote_file",
+      "row_count": 21,
+      "column_count": 8,
+      "inferred_reference_year": null,
+      "selected_layer": null,
+      "origin_url": "https://datos.madrid.es/dataset/900012-0-limites-administrativos-mapas/resource/900012-3-limites-administrativos-mapas/download/900012-3-limites-administrativos-mapas.json",
+      "cache_path": "data/fetched/madrid_district_boundaries.json",
+      "warning_count": 2
+    }
+  ],
+  "skipped_items": [
+    {
+      "item_label": "rent_stats_2023.xlsx",
+      "item_origin": "raw_scan",
+      "reason": "Unsupported file extension '.xlsx'."
+    },
+    {
+      "item_label": "urban_atlas_height.tif",
+      "item_origin": "raw_scan",
+      "reason": "Unsupported file extension '.tif'."
+    }
+  ],
+  "warnings": [
+    "Some collection items were skipped or failed. Review the skipped item list before continuing."
+  ]
+}

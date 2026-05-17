@@ -1,32 +1,29 @@
-# Madrid Urban Workflow Dashboard
+# Madrid Urban Workflow
 
-This repository contains a transparent urban data workflow for **collecting**, **feature-engineering**, and **analyzing** heterogeneous datasets about Madrid, plus a Dash dashboard for inspecting the resulting evidence.
+This repository contains a transparent urban data workflow for Madrid and a Dash dashboard for inspecting the resulting data and model outputs.
 
-The current project architecture is centered on:
-- bounded source collection with provenance
-- explicit district- and grid-level feature tables
-- interpretable unsupervised ML
-- a dashboard that explains both data and pipeline stages
+## What the project does
 
-The repository no longer uses the earlier LangGraph/LLM interpretation workflow as its active architecture.
+The workflow:
 
-## What the workflow does
+1. collects local and optional remote sources with provenance tracking
+2. pauses for a human review checkpoint after collection
+3. builds district-level and 250 m grid-level feature tables
+4. runs KMeans clustering on grid features
+5. runs IsolationForest anomaly detection on district features
+6. writes outputs for inspection in the dashboard
 
-The current workflow runs in these stages:
+The dashboard supports:
 
-1. **Collect sources** from `data/raw` and optional manifest-declared sources
-2. **Pause for human review** of collected sources and provenance
-3. **Build feature tables**
-   - `grid_features`
-   - `district_features`
-4. **Run clustering**
-   - urban form/access typology at 250m cell level
-5. **Run anomaly detection**
-   - district-level socio-spatial mismatch
-6. **Generate evaluation outputs**
-   - clustering evaluation
-   - anomaly evaluation
-7. **Inspect results in the dashboard**
+- district-level indicator inspection
+- grid-based views for land use, building height, and mobility
+- comparison between districts
+- a pipeline mode that explains workflow stages and outputs
+
+## Entry points
+
+- `python main.py` runs the full workflow
+- `python app.py` starts the dashboard
 
 ## Repository structure
 
@@ -34,74 +31,112 @@ The current workflow runs in these stages:
 project-root/
 ├── app.py
 ├── main.py
-├── run_ml_pipeline.py
+├── backend/
+│   ├── dashboard_data/
+│   ├── features/
+│   ├── models/
+│   ├── schemas/
+│   └── workflow/
+├── frontend/
+│   ├── assets/
+│   ├── callbacks.py
+│   ├── dashboard_app.py
+│   ├── dashboard_logic.py
+│   ├── layout.py
+│   ├── maps.py
+│   ├── panels.py
+│   └── pipeline_view.py
 ├── data/
 │   ├── fetched/
 │   ├── raw/
-│   └── source_manifest.json
-├── outputs/
-│   ├── ml/
-│   └── reports/
-├── src/
-│   ├── collection.py
-│   ├── feature_engineering.py
-│   ├── ml_schemas.py
-│   ├── preprocessing.py
-│   ├── dashboard_context.py
-│   ├── schemas.py
-│   └── modeling/
-│       ├── clustering.py
-│       ├── anomaly.py
-│       └── evaluation.py
-└── combined_dataset.ipynb
+│   └── source_catalog.json
+├── notebooks/
+│   └── combined_dataset.ipynb
+└── outputs/
+    ├── collection/
+    └── ml/
+```
+
+## Setup
+
+```bash
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
 ```
 
 ## Input data
 
 Supported local input formats:
+
 - `.csv`
 - `.gpkg`
 
-Place source files in:
+Place local source files in:
 
 ```text
 data/raw/
 ```
 
-Optional bounded remote sources can be declared in:
+Optional bounded remote or local source declarations can be defined in:
 
 ```text
-data/source_manifest.json
+data/source_catalog.json
 ```
 
-Supported manifest acquisition modes:
-- `local_file`
-- `remote_file`
-- `api`
+Supported source types include:
 
-Supported manifest formats:
-- `csv`
-- `geopackage`
-- `json` for tabular API-style responses, including CKAN-style `result.records`
+- local files
+- remote files
+- API responses
 
-All remote sources are cached in:
+Fetched remote sources are cached in:
 
 ```text
 data/fetched/
 ```
 
+## Running the workflow
+
+Run the full collection and ML workflow:
+
+```bash
+python main.py
+```
+
+The CLI is summary-first by default. After source collection, it asks whether to continue or inspect detailed collection output. Later modeling stages use the same concise-first pattern with optional detail views.
+
+## Running the dashboard
+
+Start the dashboard:
+
+```bash
+python app.py
+```
+
 ## Main outputs
 
-The ML pipeline writes outputs to:
+Collection outputs are written to:
+
+```text
+outputs/collection/
+```
+
+Key collection artifact:
+
+- `source_collection_report.json`
+
+ML outputs are written to:
 
 ```text
 outputs/ml/
 ```
 
-Current outputs include:
-- `feature_table_specs.json`
+Key ML artifacts include:
+
 - `grid_features.csv`
 - `district_features.csv`
+- `feature_definitions.json`
 - `grid_clusters_kmeans.csv`
 - `cluster_profiles_kmeans.json`
 - `district_cluster_mix_kmeans.csv`
@@ -109,112 +144,16 @@ Current outputs include:
 - `district_anomaly_explanations_isolation_forest.json`
 - `model_evaluation_summary.md`
 
-Collection outputs remain in:
+## Notes on the derived grid dataset
+
+The research-derived 250 m grid dataset used in the dashboard and ML workflow is documented in:
 
 ```text
-outputs/reports/
+notebooks/combined_dataset.ipynb
 ```
 
-## Modeling design
+It integrates land use, building height, public transport accessibility, rent, public housing, and district labels into one derived analytical dataset.
 
-### Clustering
+## Interpretation
 
-The clustering layer is framed as **urban form/access typology**.
-
-V1 clustering uses:
-- simplified land use
-- mean building height
-- maximum building height
-- public transport stop count
-
-The current dashboard baseline keeps:
-- `KMeans`
-
-### Anomaly detection
-
-The anomaly layer is framed as **district-level socio-spatial mismatch**.
-
-It combines:
-- district socioeconomic indicators
-- district environmental indicators
-- aggregated grid features
-- district typology composition shares
-
-The current exploratory baseline keeps:
-- `IsolationForest`
-
-## Dashboard
-
-The dashboard lives in:
-
-```text
-app.py
-```
-
-It is intended to:
-- show district-level and grid-level evidence
-- surface provenance and caveats
-- explain the pipeline in a dedicated pipeline mode
-- later integrate clustering and anomaly outputs into the right sidebar and topic flow
-
-## How to run
-
-### 1. Create and activate a virtual environment
-
-Example:
-
-```bash
-python -m venv .venv
-source .venv/bin/activate
-```
-
-### 2. Install dependencies
-
-```bash
-pip install -r requirements.txt
-```
-
-### 3. Run the collection + ML pipeline
-
-```bash
-python main.py
-```
-
-This will:
-- run source collection
-- show a human review checkpoint
-- then run feature engineering, clustering, anomaly detection, and evaluation
-
-### 4. Run the dashboard
-
-```bash
-python app.py
-```
-
-## Provenance of the cell-based dataset
-
-The research-derived 250m grid dataset used in the dashboard and ML workflow is documented in:
-
-```text
-combined_dataset.ipynb
-```
-
-That notebook progressively integrates:
-- Urban Atlas land use
-- Urban Atlas building height
-- OpenStreetMap-based public transport features
-- district-level rent statistics
-- district-level EMVS public housing
-- district labels
-
-This grid dataset is therefore a **derived integration product**, not a single direct source.
-
-## Current focus
-
-The current codebase is focused on:
-- making transformations inspectable
-- preserving provenance
-- building defensible ML outputs
-- integrating those outputs into the dashboard step by step
-
-The ML outputs should be treated as exploratory analytical layers, not automated planning decisions.
+The outputs in this repository are exploratory analytical signals. They should support inspection and discussion, not automated planning decisions.

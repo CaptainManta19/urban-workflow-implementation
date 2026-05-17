@@ -1,0 +1,50 @@
+{
+  "sources": [
+    {
+      "source_id": "madrid_population_district_barrio_api",
+      "source_name": "Madrid Population By District And Barrio API",
+      "acquisition_mode": "api",
+      "source_type": "tabular",
+      "file_format": "json",
+      "url": "https://datos.madrid.es/api/3/action/datastore_search",
+      "params": {
+        "resource_id": "300557-0-poblacion-distrito-barrio-csv"
+      },
+      "description": "Official annual population by district and barrio from the Madrid open data portal.",
+      "discovery_notes": [
+        "Selected as a stronger demographic source for densification-oriented analysis than generic amenity APIs.",
+        "The explicit limit parameter was removed, so the API now falls back to its default page size rather than the earlier 5-row test sample."
+      ]
+    },
+    {
+      "source_id": "madrid_district_indicator_panel_api",
+      "source_name": "Madrid District Indicator Panel API",
+      "acquisition_mode": "api",
+      "source_type": "tabular",
+      "file_format": "json",
+      "url": "https://datos.madrid.es/api/3/action/datastore_search",
+      "params": {
+        "resource_id": "300087-0-indicadores-distritos-csv"
+      },
+      "description": "Territorial indicator panel for Madrid districts and barrios, including socio-demographic and housing-related variables.",
+      "discovery_notes": [
+        "Selected as a potentially rich supporting source for territorial comparison.",
+        "The explicit limit parameter was removed, so the API now falls back to its default page size rather than the earlier 5-row test sample."
+      ]
+    },
+    {
+      "source_id": "madrid_district_boundaries_remote",
+      "source_name": "Madrid District Boundaries",
+      "acquisition_mode": "remote_file",
+      "source_type": "geospatial",
+      "file_format": "json",
+      "url": "https://datos.madrid.es/dataset/900012-0-limites-administrativos-mapas/resource/900012-3-limites-administrativos-mapas/download/900012-3-limites-administrativos-mapas.json",
+      "expected_file_name": "madrid_district_boundaries.json",
+      "description": "Administrative district and barrio boundary download used as the spatial reference source for district-led comparison.",
+      "discovery_notes": [
+        "Selected as the key support source for district-level mapping and spatial aggregation in the Block D workflow.",
+        "This source is geospatial JSON rather than tabular JSON and is intended to anchor later district alignment logic."
+      ]
+    }
+  ]
+}

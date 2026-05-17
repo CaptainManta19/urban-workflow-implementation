@@ -7,13 +7,12 @@ This repository implements a transparent urban data workflow for Madrid:
 - source collection with provenance tracking
 - human review checkpoint after collection
 - feature engineering at grid and district levels
-- unsupervised ML (KMeans clustering + IsolationForest anomaly detection)
+- unsupervised ML with KMeans clustering and IsolationForest anomaly detection
 - dashboard-based inspection in `app.py`
 
 Primary entry points:
 
-- `main.py`: collection flow + human approval step + ML pipeline
-- `run_ml_pipeline.py`: feature engineering, modeling, and evaluation only
+- `main.py`: collection flow, human approval step, and ML pipeline
 - `app.py`: interactive dashboard
 
 ## Approval-First Agent Policy (Required)
@@ -28,7 +27,7 @@ Before editing, creating, deleting, or renaming any file, the agent must:
 
 Allowed without approval:
 
-- read-only exploration (reading files, searching code, explaining behavior)
+- read-only exploration
 - proposing plans or patch previews in chat
 
 Not allowed without approval:
@@ -48,16 +47,10 @@ source .venv/bin/activate
 pip install -r requirements.txt
 ```
 
-Run full collection + ML workflow:
+Run full workflow:
 
 ```bash
 python main.py
-```
-
-Run ML workflow only:
-
-```bash
-python run_ml_pipeline.py
 ```
 
 Run dashboard:
@@ -68,10 +61,10 @@ python app.py
 
 ## Code Style Guidelines
 
-- Use Python type hints for new/changed functions.
+- Use Python type hints for new or changed functions.
 - Follow existing style: small focused functions, dataclasses for structured artifacts, readable naming.
 - Keep transformations transparent and auditable; prefer explicit intermediate variables over dense one-liners.
-- Preserve compatibility patterns already used in repo (example: graceful fallback branches for library version differences).
+- Preserve compatibility patterns already used in repo.
 - Do not introduce broad architectural changes unless explicitly requested.
 
 ## Testing and Validation Instructions
@@ -83,22 +76,16 @@ For any approved code change, run lightweight validation relevant to the changed
 1. Syntax/import check:
 
 ```bash
-python -m py_compile main.py run_ml_pipeline.py app.py
+python -m py_compile main.py app.py frontend/*.py backend/**/*.py
 ```
 
-2. If pipeline code changed, run:
-
-```bash
-python run_ml_pipeline.py
-```
-
-3. If collection flow changed, run:
+2. If workflow code changed, run:
 
 ```bash
 python main.py
 ```
 
-4. If dashboard code changed, run:
+3. If dashboard code changed, run:
 
 ```bash
 python app.py
@@ -108,8 +95,8 @@ When reporting results, mention what was run and what was not run.
 
 ## Security and Data-Safety Considerations
 
-- Treat all external/remote data sources as untrusted input; validate schema and required fields before downstream use.
+- Treat all external or remote data sources as untrusted input.
 - Avoid hardcoding secrets or tokens; use environment variables for credentials.
-- Do not commit sensitive local artifacts (credentials, private datasets, `.env` files).
+- Do not commit sensitive local artifacts such as credentials or `.env` files.
 - Preserve provenance outputs and warnings so data lineage remains inspectable.
-- ML outputs are exploratory analytical signals, not automated planning decisions; avoid overstating certainty in generated text/UI.
+- ML outputs are exploratory analytical signals, not automated planning decisions.
