@@ -1,6 +1,7 @@
 /.DS_Store
 /.env
 /.venv
+/AGENTS.md
 /__pycache__
 **/__pycache__/
 *.py[cod]
@@ -12,5 +13,9 @@
 data/fetched/*
 !data/fetched/.gitkeep
 
-# Optional: generated pipeline artifacts
-# outputs/**
+# Generated pipeline artifacts
+outputs/**
+!outputs/collection/
+!outputs/collection/.gitkeep
+!outputs/ml/
+!outputs/ml/.gitkeep
