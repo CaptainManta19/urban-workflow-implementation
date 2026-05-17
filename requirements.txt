@@ -7,3 +7,5 @@ pyogrio
 pyproj
 shapely
 tabulate
+numpy
+scikit-learn
