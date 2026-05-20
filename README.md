@@ -166,16 +166,38 @@ It is intended to:
 
 ## How to run
 
-### 1. Clone with Git LFS
+### 1. Clone the repository
+
+```bash
+git clone <repo-url>
+cd urban-workflow-implementation
+```
+
+### 2. Check whether Git LFS is available
 
 This repository requires Git LFS for tracked raw files such as `.gpkg`, `.tif`, and `.xlsx`.
 
-Install Git LFS once on your machine, then clone and fetch the LFS objects:
+Check whether Git LFS is already installed:
+
+```bash
+git lfs version
+```
+
+If that command fails, install Git LFS first.
+
+Common installation options:
+- macOS with Homebrew: `brew install git-lfs`
+- Windows with Winget: `winget install GitHub.GitLFS`
+- Linux and other systems: follow the official instructions at `https://git-lfs.com`
+
+If you cannot install Git LFS on the machine, the workflow will not have access to required tracked raw data files.
+
+### 3. Initialise Git LFS and fetch the tracked data
+
+Once Git LFS is installed, run:
 
 ```bash
 git lfs install
-git clone <repo-url>
-cd urban-workflow-implementation
 git lfs pull
 ```
 
@@ -183,7 +205,7 @@ Important:
 - Do not use GitHub "Download ZIP" for a reproducible setup. ZIP downloads can contain Git LFS pointer files instead of the real raw data.
 - If `data/raw/*.gpkg` opens as a short text file starting with `version https://git-lfs.github.com/spec/v1`, the LFS objects were not fetched yet.
 
-### 2. Create and activate a virtual environment
+### 4. Create and activate a virtual environment
 
 Example:
 
@@ -192,13 +214,13 @@ python -m venv .venv
 source .venv/bin/activate
 ```
 
-### 3. Install dependencies
+### 5. Install dependencies
 
 ```bash
 pip install -r requirements.txt
 ```
 
-### 4. Run the collection + ML pipeline
+### 6. Run the collection + ML pipeline
 
 ```bash
 python main.py
@@ -211,7 +233,7 @@ This will:
 
 If required Git LFS data files are still unresolved, the collection step will now stop with a clear error message telling you to run `git lfs pull`.
 
-### 5. Run the dashboard
+### 7. Run the dashboard
 
 ```bash
 python app.py
@@ -223,6 +245,7 @@ If a raw source is unexpectedly skipped or collection fails on another machine:
 - verify Git LFS is installed: `git lfs version`
 - from the repository root, run: `git lfs pull`
 - check tracked files: `git lfs ls-files`
+- if `git lfs` is not found, install Git LFS first via your platform package manager or `https://git-lfs.com`
 - avoid copying the repository via GitHub ZIP download if you need the raw data files
 
 ## Provenance of the cell-based dataset
