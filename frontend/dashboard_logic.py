@@ -652,6 +652,39 @@ PIPELINE_STAGE_REPRESENT_SVG = (
     '<rect x="3" y="5" width="18" height="12" rx="2"/><path d="M8 20h8"/><path d="M12 17v3"/>'
 )
 
+PIPELINE_STAGES = [
+    {
+        "id": "source_intake",
+        "title": "Source inputs",
+        "subtitle": "Gather topic inputs and provenance",
+        "icon_svg": PIPELINE_STAGE_SOURCE_SVG,
+    },
+    {
+        "id": "cleaning",
+        "title": "Cleaning & alignment",
+        "subtitle": "Standardise inputs for comparison",
+        "icon_svg": PIPELINE_STAGE_CLEANING_SVG,
+    },
+    {
+        "id": "topic_preparation",
+        "title": "Feature preparation",
+        "subtitle": "Build the indicators used in the dashboard",
+        "icon_svg": PIPELINE_STAGE_PREP_SVG,
+    },
+    {
+        "id": "validation",
+        "title": "Modeling & evaluation",
+        "subtitle": "Generate exploratory patterns and review model outputs",
+        "icon_svg": PIPELINE_STAGE_VALIDATE_SVG,
+    },
+    {
+        "id": "representation",
+        "title": "Dashboard translation",
+        "subtitle": "Translate outputs into map and sidebar views",
+        "icon_svg": PIPELINE_STAGE_REPRESENT_SVG,
+    },
+]
+
 
 def build_pipeline_stage_icon(svg_inner: str, is_active: bool) -> str:
     return build_lucide_icon_data_uri(svg_inner, stroke="#111827")

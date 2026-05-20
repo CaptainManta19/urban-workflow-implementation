@@ -170,6 +170,7 @@ def get_pipeline_stage_artifact(stage_id: str, topic: str | None) -> dict[str, s
     is_grid_topic = topic in GRID_TOPICS
     if stage_id == "source_intake":
         return {
+            "stage_id": stage_id,
             "artifact_id": "collection_report",
             "title": "Source inventory report",
             "filename": "source_collection_report.json",
@@ -179,6 +180,7 @@ def get_pipeline_stage_artifact(stage_id: str, topic: str | None) -> dict[str, s
         }
     if stage_id == "topic_preparation":
         return {
+            "stage_id": stage_id,
             "artifact_id": "grid_features" if is_grid_topic else "district_features",
             "title": "Prepared grid feature table" if is_grid_topic else "Prepared district feature table",
             "filename": "grid_features.csv" if is_grid_topic else "district_features.csv",
@@ -190,6 +192,7 @@ def get_pipeline_stage_artifact(stage_id: str, topic: str | None) -> dict[str, s
         if not topic:
             return None
         return {
+            "stage_id": stage_id,
             "artifact_id": "clustering_summary" if is_grid_topic else "anomaly_summary",
             "title": "Clustering model summary" if is_grid_topic else "District standout summary",
             "filename": "model_evaluation_summary.md",
@@ -215,7 +218,7 @@ def build_pipeline_artifact_button(artifact: dict[str, str]) -> html.Button:
             html.Div(copy_children, className="pipeline-artifact-item-copy"),
             html.Div("Open", className="pipeline-artifact-item-toggle"),
         ],
-        id={"type": "pipeline-artifact-button", "artifact": artifact["artifact_id"], "stage": artifact["preview_kind"]},
+        id={"type": "pipeline-artifact-button", "artifact": artifact["artifact_id"], "stage": artifact["stage_id"]},
         n_clicks=0,
         className="pipeline-artifact-item",
     )

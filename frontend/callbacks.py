@@ -15,10 +15,12 @@ from frontend.panels import (
     build_topic_prompt_panel,
 )
 from frontend.pipeline_view import (
+    build_pipeline_artifact_modal_content,
     build_pipeline_center,
     build_pipeline_empty_state,
     build_pipeline_prompt_panel,
     build_pipeline_stage_panel,
+    get_pipeline_stage_artifact,
 )
 
 
@@ -932,7 +934,8 @@ def register_callbacks(app: Dash) -> None:
             and triggered.get("type") == "pipeline-artifact-button"
             and any(artifact_clicks or [])
         ):
-            artifact = get_pipeline_stage_artifact(pipeline_stage, topic)
+            clicked_stage = triggered.get("stage", pipeline_stage)
+            artifact = get_pipeline_stage_artifact(clicked_stage, topic)
             if artifact is None:
                 return None
             return {
