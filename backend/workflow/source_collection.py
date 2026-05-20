@@ -114,6 +114,25 @@ def compute_sha256(file_path: Path) -> str:
     return digest.hexdigest()
 
 
+def is_git_lfs_pointer_file(file_path: Path) -> bool:
+    try:
+        with file_path.open("rb") as file_handle:
+            header = file_handle.read(256)
+    except OSError:
+        return False
+
+    return header.startswith(b"version https://git-lfs.github.com/spec/v1\n")
+
+
+def ensure_file_is_materialised(file_path: Path) -> None:
+    if is_git_lfs_pointer_file(file_path):
+        raise ValueError(
+            "File is an unresolved Git LFS pointer. Install Git LFS, then run "
+            "'git lfs pull' after cloning the repository. GitHub ZIP downloads "
+            "do not fetch required LFS objects."
+        )
+
+
 def build_provenance(file_path: Path, project_root: Path) -> SourceProvenance:
     stat_result = file_path.stat()
 
@@ -914,6 +933,8 @@ def collect_source_from_path(
     collected_at: datetime,
     context: CollectionContext,
 ) -> CollectedSource:
+    ensure_file_is_materialised(file_path)
+
     if context.file_format == "csv":
         return collect_csv(file_path, project_root, collected_at, context)
 
