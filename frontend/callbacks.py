@@ -12,6 +12,8 @@ from frontend.maps import (
 from frontend.panels import (
     build_district_sidebar,
     build_info_panel,
+    build_shared_compare_section,
+    build_typology_comparison_section,
     build_topic_prompt_panel,
 )
 from frontend.pipeline_view import (
