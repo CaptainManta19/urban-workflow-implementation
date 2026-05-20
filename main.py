@@ -1,3 +1,4 @@
+import sys
 from pathlib import Path
 
 from backend.workflow.ml_pipeline import run_pipeline
@@ -5,8 +6,16 @@ from backend.workflow.source_collection import collect_sources, save_collection_
 
 
 def ask_to_continue_or_inspect(message: str) -> str:
+    if not sys.stdin.isatty():
+        print("No interactive input available. Workflow stopped after source collection.")
+        return "no"
+
     while True:
-        response = input(f"\n{message} [y]es / [n]o / [i]nspect details: ").strip().lower()
+        try:
+            response = input(f"\n{message} [y]es / [n]o / [i]nspect details: ").strip().lower()
+        except EOFError:
+            print("No interactive input available. Workflow stopped after source collection.")
+            return "no"
 
         if response in {"y", "yes"}:
             return "yes"
@@ -19,8 +28,16 @@ def ask_to_continue_or_inspect(message: str) -> str:
 
 
 def ask_yes_no(message: str) -> bool:
+    if not sys.stdin.isatty():
+        print("No interactive input available. Workflow stopped after source collection.")
+        return False
+
     while True:
-        response = input(f"\n{message} [y]es / [n]o: ").strip().lower()
+        try:
+            response = input(f"\n{message} [y]es / [n]o: ").strip().lower()
+        except EOFError:
+            print("No interactive input available. Workflow stopped after source collection.")
+            return False
         if response in {"y", "yes"}:
             return True
         if response in {"n", "no"}:
